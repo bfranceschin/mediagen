@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 import mediagen
 
 
@@ -129,6 +131,223 @@ class TestBuildNano2Args:
         assert "seed" not in result
 
 
+# ── build_seedance2_args ─────────────────────────────────────────────────────
+
+class TestBuildSeedance2Args:
+    def _make_args(self, **overrides):
+        defaults = {
+            "prompt": "video test",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": 5,
+            "no_audio": False,
+            "camera_fixed": False,
+            "seed": None,
+            "image_url": None,
+            "end_image_url": None,
+        }
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_text_to_video_basic(self):
+        args = self._make_args()
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["prompt"] == "video test"
+        assert result["aspect_ratio"] == "16:9"
+        assert result["resolution"] == "720p"
+        assert result["duration"] == "5"
+        assert result["enable_audio"] is True
+        assert result["enable_safety_checker"] is False
+        assert "static_video" not in result
+        assert "image_url" not in result
+        assert "end_image_url" not in result
+        assert "seed" not in result
+
+    def test_no_audio_flag(self):
+        args = self._make_args(no_audio=True)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["enable_audio"] is False
+
+    def test_camera_fixed_flag(self):
+        args = self._make_args(camera_fixed=True)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["static_video"] is True
+
+    def test_camera_not_fixed_by_default(self):
+        args = self._make_args(camera_fixed=False)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert "static_video" not in result
+
+    def test_seed_included_when_provided(self):
+        args = self._make_args(seed=42)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["seed"] == 42
+
+    def test_seed_absent_when_none(self):
+        args = self._make_args(seed=None)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert "seed" not in result
+
+    def test_image_to_video_includes_image_url(self):
+        args = self._make_args(image_url="https://example.com/start.png")
+        result = mediagen.build_seedance2_args(args, "image-to-video")
+        assert result["image_url"] == "https://example.com/start.png"
+
+    def test_image_to_video_with_end_image(self):
+        args = self._make_args(
+            image_url="https://example.com/start.png",
+            end_image_url="https://example.com/end.png",
+        )
+        result = mediagen.build_seedance2_args(args, "image-to-video")
+        assert result["image_url"] == "https://example.com/start.png"
+        assert result["end_image_url"] == "https://example.com/end.png"
+
+    def test_image_to_video_without_end_image(self):
+        args = self._make_args(image_url="https://example.com/start.png", end_image_url=None)
+        result = mediagen.build_seedance2_args(args, "image-to-video")
+        assert "end_image_url" not in result
+
+    def test_custom_aspect_ratio(self):
+        args = self._make_args(aspect_ratio="9:16")
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["aspect_ratio"] == "9:16"
+
+    def test_custom_resolution(self):
+        args = self._make_args(resolution="1080p")
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["resolution"] == "1080p"
+
+    def test_duration_converted_to_string(self):
+        args = self._make_args(duration=10)
+        result = mediagen.build_seedance2_args(args, "text-to-video")
+        assert result["duration"] == "10"
+        assert isinstance(result["duration"], str)
+
+
+# ── validate_args ────────────────────────────────────────────────────────────
+
+class TestValidateArgs:
+    def _make_image_args(self, **overrides):
+        defaults = {
+            "model": "flux2",
+            "width": 1280,
+            "height": 720,
+            "steps": 28,
+            "enable_web_search": False,
+            "inputs": None,
+            "end_image": None,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "duration": 5,
+            "camera_fixed": False,
+            "no_audio": False,
+        }
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def _make_video_args(self, **overrides):
+        defaults = {
+            "model": "seedance2",
+            "width": 1280,
+            "height": 720,
+            "steps": 28,
+            "enable_web_search": False,
+            "inputs": None,
+            "end_image": None,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "duration": 5,
+            "camera_fixed": False,
+            "no_audio": False,
+        }
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_valid_image_args_pass(self):
+        """Basic image args should not raise."""
+        args = self._make_image_args()
+        mediagen.validate_args(args)  # should not exit
+
+    def test_valid_video_args_pass(self):
+        """Basic video args should not raise."""
+        args = self._make_video_args()
+        mediagen.validate_args(args)  # should not exit
+
+    def test_video_duration_too_low(self):
+        """Duration < 4 should fail."""
+        args = self._make_video_args(duration=3)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_video_duration_too_high(self):
+        """Duration > 12 should fail."""
+        args = self._make_video_args(duration=13)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_video_duration_boundary_low(self):
+        """Duration = 4 should pass."""
+        args = self._make_video_args(duration=4)
+        mediagen.validate_args(args)  # should not exit
+
+    def test_video_duration_boundary_high(self):
+        """Duration = 12 should pass."""
+        args = self._make_video_args(duration=12)
+        mediagen.validate_args(args)  # should not exit
+
+    def test_video_end_image_without_inputs(self):
+        """End image without start image should fail."""
+        args = self._make_video_args(end_image="/path/to/end.png", inputs=None)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_video_multiple_inputs(self):
+        """Image-to-video with >1 input should fail."""
+        args = self._make_video_args(inputs=["/a.png", "/b.png"])
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_video_single_input_passes(self):
+        """Image-to-video with exactly 1 input should pass."""
+        args = self._make_video_args(inputs=["/a.png"])
+        mediagen.validate_args(args)  # should not exit
+
+    def test_image_model_with_camera_fixed(self):
+        """camera_fixed with image model should fail."""
+        args = self._make_image_args(camera_fixed=True)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_image_model_with_no_audio(self):
+        """no_audio with image model should fail."""
+        args = self._make_image_args(no_audio=True)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_image_model_with_end_image(self):
+        """end_image with image model should fail."""
+        args = self._make_image_args(end_image="/path/end.png")
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_video_model_with_enable_web_search(self):
+        """enable_web_search with video model should fail."""
+        args = self._make_video_args(enable_web_search=True)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_image_edit_max_4_inputs(self):
+        """Image edit with >4 inputs should fail."""
+        args = self._make_image_args(inputs=["/a.png", "/b.png", "/c.png", "/d.png", "/e.png"])
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_image_edit_4_inputs_passes(self):
+        """Image edit with exactly 4 inputs should pass."""
+        args = self._make_image_args(inputs=["/a.png", "/b.png", "/c.png", "/d.png"])
+        mediagen.validate_args(args)  # should not exit
+
+
 # ── copy_to_external ──────────────────────────────────────────────────────────
 
 class TestCopyToExternal:
@@ -160,31 +379,77 @@ class TestCopyToExternal:
 # ── ensure_dirs ───────────────────────────────────────────────────────────────
 
 class TestEnsureDirs:
-    def test_creates_directories(self, tmp_path):
-        """ensure_dirs should create all required workspace dirs."""
+    def test_creates_image_directories(self, tmp_path):
+        """ensure_dirs for images should create raw/ dir."""
         ws = tmp_path / "test_workspace"
         mediagen.WORKSPACE = ws
         mediagen.IMAGES_DIR = ws / "images"
         mediagen.RAW_DIR = ws / "images" / "raw"
+        mediagen.VIDEOS_RAW_DIR = ws / "videos" / "raw"
         mediagen.EXTERNAL_DIR = ws / "external"
         mediagen.LOGS_DIR = ws / "logs"
 
-        mediagen.ensure_dirs()
+        mediagen.ensure_dirs(media_type="image")
 
         assert (ws / "images" / "raw").is_dir()
         assert (ws / "external").is_dir()
         assert (ws / "logs").is_dir()
+        # videos/raw should NOT be created for image mode
+        assert not (ws / "videos" / "raw").exists()
 
-    def test_idempotent(self, tmp_path):
-        """ensure_dirs should not fail if dirs already exist."""
+    def test_creates_video_directories(self, tmp_path):
+        """ensure_dirs for videos should create videos/raw/ dir."""
         ws = tmp_path / "test_workspace2"
         mediagen.WORKSPACE = ws
         mediagen.IMAGES_DIR = ws / "images"
         mediagen.RAW_DIR = ws / "images" / "raw"
+        mediagen.VIDEOS_RAW_DIR = ws / "videos" / "raw"
         mediagen.EXTERNAL_DIR = ws / "external"
         mediagen.LOGS_DIR = ws / "logs"
 
-        mediagen.ensure_dirs()
-        mediagen.ensure_dirs()  # second call — no error
+        mediagen.ensure_dirs(media_type="video")
+
+        assert (ws / "videos" / "raw").is_dir()
+        assert (ws / "external").is_dir()
+        assert (ws / "logs").is_dir()
+        # images/raw should NOT be created for video mode
+        assert not (ws / "images" / "raw").exists()
+
+    def test_idempotent(self, tmp_path):
+        """ensure_dirs should not fail if dirs already exist."""
+        ws = tmp_path / "test_workspace3"
+        mediagen.WORKSPACE = ws
+        mediagen.IMAGES_DIR = ws / "images"
+        mediagen.RAW_DIR = ws / "images" / "raw"
+        mediagen.VIDEOS_RAW_DIR = ws / "videos" / "raw"
+        mediagen.EXTERNAL_DIR = ws / "external"
+        mediagen.LOGS_DIR = ws / "logs"
+
+        mediagen.ensure_dirs(media_type="image")
+        mediagen.ensure_dirs(media_type="image")  # second call — no error
 
         assert (ws / "images" / "raw").is_dir()
+
+
+# ── Model routing ─────────────────────────────────────────────────────────────
+
+class TestModelRouting:
+    def test_image_models_set(self):
+        assert mediagen.IMAGE_MODELS == {"flux2", "nano2"}
+
+    def test_video_models_set(self):
+        assert mediagen.VIDEO_MODELS == {"seedance2"}
+
+    def test_model_map_has_all_models(self):
+        for m in mediagen.IMAGE_MODELS | mediagen.VIDEO_MODELS:
+            assert m in mediagen.MODEL_MAP
+
+    def test_seedance2_endpoints(self):
+        assert "text-to-video" in mediagen.MODEL_MAP["seedance2"]
+        assert "image-to-video" in mediagen.MODEL_MAP["seedance2"]
+        assert "fal-ai/bytedance/seedance/v1.5/pro/text-to-video" in mediagen.MODEL_MAP["seedance2"]["text-to-video"]
+        assert "fal-ai/bytedance/seedance/v1.5/pro/image-to-video" in mediagen.MODEL_MAP["seedance2"]["image-to-video"]
+
+    def test_timeouts(self):
+        assert mediagen.IMAGE_TIMEOUT_SECONDS == 120
+        assert mediagen.VIDEO_TIMEOUT_SECONDS == 300
