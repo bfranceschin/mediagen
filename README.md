@@ -68,6 +68,28 @@ external/        → Copies of user-provided input images
 logs/            → Structured JSON logs per generation
 ```
 
+## Testing
+
+```bash
+# Run unit tests (fast, no API calls, no cost)
+python -m pytest tests/test_unit.py -v
+
+# Run integration tests (calls real fal.ai API — costs ~$0.01-0.05)
+python -m pytest tests/test_integration.py -v --run-integration
+
+# Run all tests
+python -m pytest tests/ -v
+```
+
+### Test structure
+
+| File | Type | API calls? | Cost |
+|------|------|-----------|------|
+| `tests/test_unit.py` | Unit tests for pure functions | ❌ No | Free |
+| `tests/test_integration.py` | Full pipeline with real API | ✅ Yes | ~$0.01-0.05 |
+
+Integration tests are **skipped by default** — only run when `--run-integration` flag is passed, so you never accidentally spend money.
+
 ## License
 
 MIT

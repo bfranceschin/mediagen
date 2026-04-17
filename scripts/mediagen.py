@@ -33,7 +33,7 @@ import fal_client
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-WORKSPACE = Path(os.path.expanduser("~/.hermes/workspace/mediagen"))
+WORKSPACE = Path(os.environ.get("MEDIAGEN_WORKSPACE", os.path.expanduser("~/.hermes/workspace/mediagen")))
 IMAGES_DIR = WORKSPACE / "images"
 RAW_DIR = IMAGES_DIR / "raw"
 EXTERNAL_DIR = WORKSPACE / "external"
