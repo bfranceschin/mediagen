@@ -1,6 +1,6 @@
 # mediagen
 
-Image and video generation skill for [Hermes Agent](https://github.com/bfranceschin/hermes-agent) — powered by [fal.ai](https://fal.ai).
+Image and video generation skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — powered by [fal.ai](https://fal.ai) plus optional GPT Image 2 via ChatGPT/Codex OAuth.
 
 ## Features
 
@@ -20,6 +20,7 @@ Image and video generation skill for [Hermes Agent](https://github.com/bfrancesc
 |-------|-----|----------|----------|------|
 | FLUX.2 [dev] | `flux2` | `fal-ai/flux-2` | High-quality photorealistic/artistic images | ~$0.012/MP |
 | Nano Banana 2 | `nano2` | `fal-ai/nano-banana-2` | Text rendering, complex composition, web grounding | ~$0.05/image |
+| GPT Image 2 | `gptimage2` | ChatGPT/Codex OAuth (`openai-codex/gpt-image-2`) | GPT Image 2 without OpenAI API key; quality tiers low/medium/high | ChatGPT quota |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | Animating images with start/end frame control | ~$0.26/5s@720p |
 
@@ -41,6 +42,19 @@ python3 scripts/mediagen.py \
   --model flux2 \
   --prompt "add a hat to the dog" \
   --inputs /path/to/image.png
+```
+
+
+### GPT Image 2 (ChatGPT/Codex OAuth)
+
+Requires `hermes auth add openai-codex` and Hermes venv Python (`httpx` + token helpers).
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py   --model gptimage2   --prompt "a tiny flat blue frog icon"   --quality medium   --width 1024 --height 1024
+```
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py   --model gptimage2   --prompt "make the sunglasses orange"   --inputs /path/to/image.png   --quality low
 ```
 
 ### Video — Text to Video

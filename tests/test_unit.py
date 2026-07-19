@@ -435,7 +435,7 @@ class TestEnsureDirs:
 
 class TestModelRouting:
     def test_image_models_set(self):
-        assert mediagen.IMAGE_MODELS == {"flux2", "nano2"}
+        assert mediagen.IMAGE_MODELS == {"flux2", "nano2", "gptimage2"}
 
     def test_video_models_set(self):
         assert mediagen.VIDEO_MODELS == {"seedance2"}
@@ -443,6 +443,19 @@ class TestModelRouting:
     def test_model_map_has_all_models(self):
         for m in mediagen.IMAGE_MODELS | mediagen.VIDEO_MODELS:
             assert m in mediagen.MODEL_MAP
+
+    
+    def test_gptimage2_endpoints(self):
+        assert "generate" in mediagen.MODEL_MAP["gptimage2"]
+        assert "edit" in mediagen.MODEL_MAP["gptimage2"]
+        assert mediagen.MODEL_MAP["gptimage2"]["generate"] == "openai-codex/gpt-image-2"
+        assert mediagen.MODEL_MAP["gptimage2"]["edit"] == "openai-codex/gpt-image-2/edit"
+
+    def test_gpt_aspect_mapping(self):
+        assert mediagen.width_height_to_gpt_aspect(1536, 1024) == "landscape"
+        assert mediagen.width_height_to_gpt_aspect(1024, 1024) == "square"
+        assert mediagen.width_height_to_gpt_aspect(1024, 1536) == "portrait"
+        assert mediagen.width_height_to_gpt_aspect(1280, 720) == "landscape"
 
     def test_seedance2_endpoints(self):
         assert "text-to-video" in mediagen.MODEL_MAP["seedance2"]
