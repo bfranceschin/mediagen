@@ -62,7 +62,14 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    from media_client import load_config as load_config
+    from media_client import sync_if_enabled as sync_if_enabled
+except ImportError:  # pragma: no cover — scripts/ always on path in normal installs
+    load_config = None  # type: ignore[assignment]
+    sync_if_enabled = None  # type: ignore[assignment]
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -173,6 +180,169 @@ def upload_to_fal(path: str) -> str:
     """Upload a file to fal.ai storage and return the public URL."""
     fal_client = require_fal_client()
     return fal_client.upload_file(path)
+
+
+def workspace_relpath(path: Path | str) -> str:
+    """Return a workspace-relative POSIX path for Media receipts/assets."""
+    p = Path(path)
+    if not p.is_absolute():
+        return str(p).replace("\\", "/")
+    try:
+        return str(p.resolve().relative_to(WORKSPACE.resolve())).replace("\\", "/")
+    except ValueError:
+        return p.name
+
+
+def _provider_for_endpoint(endpoint: str) -> str:
+    if "openai-codex" in endpoint or endpoint.startswith("openai"):
+        return "openai-codex"
+    return "fal"
+
+
+def build_media_sync_payload(
+    *,
+    kind: str,
+    mode: str,
+    model: str,
+    endpoint: str,
+    prompt: str,
+    seed: Any,
+    output_path: Path | str,
+    input_md_entries: List[dict],
+    end_md_entry: Optional[dict],
+    params: Optional[dict] = None,
+) -> Tuple[List[dict], dict]:
+    """Build assets + generation payload for media_client.sync_if_enabled.
+
+    Role mapping:
+      - image edit inputs → edit_source by position
+      - i2v first input → start_frame; end_image → end_frame
+    Never includes legacy Markdown paths.
+    """
+    assets: List[dict] = []
+    gen_inputs: List[dict] = []
+
+    if kind == "image" and mode == "edit":
+        for i, entry in enumerate(input_md_entries or []):
+            rel = workspace_relpath(entry["path"])
+            assets.append(
+                {
+                    "path": rel,
+                    "kind": "image",
+                    "origin": "external_import",
+                    "show_in_grid": False,
+                    "role": "edit_source",
+                    "position": i,
+                }
+            )
+            gen_inputs.append({"path": rel, "role": "edit_source", "position": i})
+    elif kind == "video" and mode == "image-to-video":
+        if input_md_entries:
+            start_rel = workspace_relpath(input_md_entries[0]["path"])
+            assets.append(
+                {
+                    "path": start_rel,
+                    "kind": "image",
+                    "origin": "external_import",
+                    "show_in_grid": False,
+                    "role": "start_frame",
+                    "position": 0,
+                }
+            )
+            gen_inputs.append({"path": start_rel, "role": "start_frame", "position": 0})
+        if end_md_entry is not None:
+            end_rel = workspace_relpath(end_md_entry["path"])
+            assets.append(
+                {
+                    "path": end_rel,
+                    "kind": "image",
+                    "origin": "external_import",
+                    "show_in_grid": False,
+                    "role": "end_frame",
+                    "position": 1,
+                }
+            )
+            gen_inputs.append({"path": end_rel, "role": "end_frame", "position": 1})
+
+    out_rel = workspace_relpath(output_path)
+    out_kind = "video" if kind == "video" else "image"
+    assets.append(
+        {
+            "path": out_rel,
+            "kind": out_kind,
+            "origin": "mediagen_generation",
+            "show_in_grid": True,
+            "position": 0,
+        }
+    )
+
+    if mode == "edit":
+        operation = "edit"
+    elif mode == "generate":
+        operation = "generate"
+    elif mode == "image-to-video":
+        operation = "image-to-video"
+    elif mode == "text-to-video":
+        operation = "text-to-video"
+    else:
+        operation = mode
+
+    gen_params = dict(params or {})
+    if "endpoint" not in gen_params:
+        gen_params["endpoint"] = endpoint
+
+    generation: dict = {
+        "tool": "mediagen",
+        "operation": operation,
+        "provider": _provider_for_endpoint(endpoint),
+        "model": model,
+        "prompt": prompt,
+        "seed": seed,
+        "params": gen_params,
+        "status": "succeeded",
+        "inputs": gen_inputs,
+        "outputs": [{"path": out_rel, "position": 0}],
+    }
+    # Safety: never treat markdown as Media assets
+    assets = [a for a in assets if not str(a.get("path", "")).endswith(".md")]
+    return assets, generation
+
+
+def finalize_generation_with_media_sync(meta: dict) -> None:
+    """After file+log persist: receipt + one Media sync attempt, then FILENAME contract.
+
+    Media failures never raise and never change generation success (exit 0 path).
+    """
+    filename = meta["filename"]
+    prompt = meta["prompt"]
+    seed_display = meta["seed_display"]
+    try:
+        if load_config is not None and sync_if_enabled is not None:
+            assets, generation = build_media_sync_payload(
+                kind=meta["kind"],
+                mode=meta["mode"],
+                model=meta["model"],
+                endpoint=meta["endpoint"],
+                prompt=prompt,
+                seed=meta.get("seed"),
+                output_path=meta["output_path"],
+                input_md_entries=meta.get("input_md_entries") or [],
+                end_md_entry=meta.get("end_md_entry"),
+                params=meta.get("params"),
+            )
+            cfg = load_config()
+            if cfg is not None:
+                sync_if_enabled(
+                    cfg,
+                    workspace=WORKSPACE,
+                    log_path=workspace_relpath(meta["log_path"]),
+                    assets=assets,
+                    generation=generation,
+                )
+    except Exception:
+        # Media must never break Telegram/FILENAME contract or generation exit code.
+        pass
+    print(f"FILENAME={filename} PROMPT={prompt} SEED={seed_display}")
 
 
 def download_file(url: str, dest: Path):
@@ -686,7 +856,8 @@ def _write_image_artifacts(
     size_str: str,
     input_md_entries: List[dict],
     log_extra: dict,
-):
+) -> dict:
+    """Persist image markdown + JSON log. Returns metadata for Media sync + FILENAME print."""
     md_path = IMAGES_DIR / f"{base_name}.md"
     if mode == "edit":
         lines = []
@@ -722,12 +893,16 @@ def _write_image_artifacts(
         f.write(md_content)
 
     log_path = LOGS_DIR / f"{base_name}.json"
+    seed_value = None if seed_display == "n/a" else (None if seed_display == "random" else seed_display)
+    # ignored:N from gptimage2 still not a real seed
+    if isinstance(seed_display, str) and seed_display.startswith("ignored:"):
+        seed_value = None
     log_data = {
         "filename": image_filename,
         "prompt": args.prompt,
         "model": endpoint,
         "mode": mode,
-        "seed": None if seed_display == "n/a" else (None if seed_display == "random" else seed_display),
+        "seed": seed_value,
         "width": args.width,
         "height": args.height,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -737,7 +912,146 @@ def _write_image_artifacts(
     with open(log_path, "w") as f:
         json.dump(log_data, f, indent=2, default=str)
 
-    print(f"FILENAME={image_filename} PROMPT={args.prompt} SEED={seed_display}")
+    model_key = getattr(args, "model", None) or "unknown"
+    params: dict[str, Any] = {
+        "endpoint": endpoint,
+        "width": args.width,
+        "height": args.height,
+        "size": size_str,
+    }
+    if "quality" in log_extra:
+        params["quality"] = log_extra["quality"]
+    if "aspect" in log_extra:
+        params["aspect"] = log_extra["aspect"]
+
+    return {
+        "kind": "image",
+        "filename": image_filename,
+        "prompt": args.prompt,
+        "seed_display": seed_display,
+        "seed": seed_value,
+        "log_path": log_path,
+        "output_path": image_path,
+        "mode": mode,
+        "endpoint": endpoint,
+        "model": model_key,
+        "input_md_entries": input_md_entries,
+        "end_md_entry": None,
+        "params": params,
+        "log_data": log_data,
+    }
+
+
+def _write_video_artifacts(
+    *,
+    video_path: Path,
+    base_name: str,
+    video_filename: str,
+    args,
+    mode: str,
+    endpoint: str,
+    returned_seed: Any,
+    input_md_entries: List[dict],
+    end_md_entry: Optional[dict],
+    result: dict,
+) -> dict:
+    """Persist video markdown + JSON log. Returns metadata for Media sync + FILENAME print."""
+    md_path = VIDEOS_DIR / f"{base_name}.md"
+    inputs_lines = []
+    if mode == "image-to-video":
+        entry = input_md_entries[0]
+        orig = Path(entry["original"])
+        if RAW_DIR.exists() and orig.parent.resolve() == RAW_DIR.resolve():
+            md_base = orig.stem
+            inputs_lines.append(f"- Start frame: [{orig.name}](../../images/{md_base}.md)")
+        else:
+            inputs_lines.append(
+                f"- Start frame: [{Path(entry['path']).name}](../external/{Path(entry['path']).name})"
+            )
+        if end_md_entry:
+            end_orig = Path(end_md_entry["original"])
+            if RAW_DIR.exists() and end_orig.parent.resolve() == RAW_DIR.resolve():
+                end_md_base = end_orig.stem
+                inputs_lines.append(f"- End frame: [{end_orig.name}](../../images/{end_md_base}.md)")
+            else:
+                inputs_lines.append(
+                    f"- End frame: [{Path(end_md_entry['path']).name}](../external/{Path(end_md_entry['path']).name})"
+                )
+    inputs_section = "\n## Inputs\n" + ("\n".join(inputs_lines) if inputs_lines else "none") + "\n"
+
+    seed_display = returned_seed if returned_seed is not None else "random"
+    audio_str = "no" if args.no_audio else "yes"
+    camera_str = "yes" if args.camera_fixed else "no"
+
+    md_content = f"""[Video file](./raw/{video_filename})
+
+# {base_name}
+
+## Prompt
+{args.prompt}
+
+## Model
+{endpoint}
+
+## Seed
+{seed_display}
+
+## Settings
+Resolution: {args.resolution}
+Duration: {args.duration}s
+Aspect ratio: {args.aspect_ratio}
+Audio: {audio_str}
+Camera fixed: {camera_str}
+{inputs_section}"""
+
+    with open(md_path, "w") as f:
+        f.write(md_content)
+
+    log_path = LOGS_DIR / f"{base_name}.json"
+    log_data = {
+        "filename": video_filename,
+        "prompt": args.prompt,
+        "model": endpoint,
+        "mode": mode,
+        "seed": returned_seed,
+        "resolution": args.resolution,
+        "duration": args.duration,
+        "aspect_ratio": args.aspect_ratio,
+        "audio": not args.no_audio,
+        "camera_fixed": args.camera_fixed,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode == "image-to-video" else [],
+        "end_image": str(Path(end_md_entry["path"])) if end_md_entry else None,
+        "fal_response": result,
+    }
+    with open(log_path, "w") as f:
+        json.dump(log_data, f, indent=2, default=str)
+
+    model_key = getattr(args, "model", None) or "seedance2"
+    params = {
+        "endpoint": endpoint,
+        "resolution": args.resolution,
+        "duration": args.duration,
+        "aspect_ratio": args.aspect_ratio,
+        "audio": not args.no_audio,
+        "camera_fixed": args.camera_fixed,
+    }
+    return {
+        "kind": "video",
+        "filename": video_filename,
+        "prompt": args.prompt,
+        "seed_display": seed_display,
+        "seed": returned_seed,
+        "log_path": log_path,
+        "output_path": video_path,
+        "mode": mode,
+        "endpoint": endpoint,
+        "model": model_key,
+        "input_md_entries": input_md_entries,
+        "end_md_entry": end_md_entry,
+        "params": params,
+        "log_data": log_data,
+    }
 
 
 # ── Image pipeline ──────────────────────────────────────────────────────────
@@ -814,17 +1128,19 @@ def run_image_fal(args):
         if model_key == "flux2"
         else api_args.get("aspect_ratio", f"{args.width}x{args.height}")
     )
-    _write_image_artifacts(
-        image_path=image_path,
-        base_name=base_name,
-        image_filename=image_filename,
-        args=args,
-        mode=mode,
-        endpoint=endpoint,
-        seed_display=seed_display,
-        size_str=size_str,
-        input_md_entries=input_md_entries,
-        log_extra={"fal_response": result},
+    finalize_generation_with_media_sync(
+        _write_image_artifacts(
+            image_path=image_path,
+            base_name=base_name,
+            image_filename=image_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            seed_display=seed_display,
+            size_str=size_str,
+            input_md_entries=input_md_entries,
+            log_extra={"fal_response": result},
+        )
     )
 
 
@@ -873,24 +1189,26 @@ def run_image_codex(args):
     # seed not supported by this API
     seed_display = "n/a" if args.seed is None else f"ignored:{args.seed}"
     size_str = f"{size} ({aspect}, quality={quality})"
-    _write_image_artifacts(
-        image_path=image_path,
-        base_name=base_name,
-        image_filename=image_filename,
-        args=args,
-        mode=mode,
-        endpoint=endpoint,
-        seed_display=seed_display,
-        size_str=size_str,
-        input_md_entries=input_md_entries,
-        log_extra={
-            "provider": "openai-codex",
-            "api_model": GPT_IMAGE_API_MODEL,
-            "quality": quality,
-            "aspect": aspect,
-            "size": size,
-            "codex_chat_model": CODEX_CHAT_MODEL,
-        },
+    finalize_generation_with_media_sync(
+        _write_image_artifacts(
+            image_path=image_path,
+            base_name=base_name,
+            image_filename=image_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            seed_display=seed_display,
+            size_str=size_str,
+            input_md_entries=input_md_entries,
+            log_extra={
+                "provider": "openai-codex",
+                "api_model": GPT_IMAGE_API_MODEL,
+                "quality": quality,
+                "aspect": aspect,
+                "size": size,
+                "codex_chat_model": CODEX_CHAT_MODEL,
+            },
+        )
     )
 
 
@@ -972,77 +1290,20 @@ def run_video(args):
     video_path = VIDEOS_RAW_DIR / video_filename
     download_file(video_url, video_path)
 
-    # Write .md file
-    md_path = VIDEOS_DIR / f"{base_name}.md"
-    inputs_lines = []
-    if mode == "image-to-video":
-        entry = input_md_entries[0]
-        orig = Path(entry["original"])
-        if RAW_DIR.exists() and orig.parent.resolve() == RAW_DIR.resolve():
-            md_base = orig.stem
-            inputs_lines.append(f"- Start frame: [{orig.name}](../../images/{md_base}.md)")
-        else:
-            inputs_lines.append(f"- Start frame: [{Path(entry['path']).name}](../external/{Path(entry['path']).name})")
-        if end_md_entry:
-            end_orig = Path(end_md_entry["original"])
-            if RAW_DIR.exists() and end_orig.parent.resolve() == RAW_DIR.resolve():
-                end_md_base = end_orig.stem
-                inputs_lines.append(f"- End frame: [{end_orig.name}](../../images/{end_md_base}.md)")
-            else:
-                inputs_lines.append(f"- End frame: [{Path(end_md_entry['path']).name}](../external/{Path(end_md_entry['path']).name})")
-    inputs_section = "\n## Inputs\n" + ("\n".join(inputs_lines) if inputs_lines else "none") + "\n"
-
-    seed_display = returned_seed if returned_seed is not None else "random"
-    audio_str = "no" if args.no_audio else "yes"
-    camera_str = "yes" if args.camera_fixed else "no"
-
-    md_content = f"""[Video file](./raw/{video_filename})
-
-# {base_name}
-
-## Prompt
-{args.prompt}
-
-## Model
-{endpoint}
-
-## Seed
-{seed_display}
-
-## Settings
-Resolution: {args.resolution}
-Duration: {args.duration}s
-Aspect ratio: {args.aspect_ratio}
-Audio: {audio_str}
-Camera fixed: {camera_str}
-{inputs_section}"""
-
-    with open(md_path, "w") as f:
-        f.write(md_content)
-
-    # Write JSON log
-    log_path = LOGS_DIR / f"{base_name}.json"
-    log_data = {
-        "filename": video_filename,
-        "prompt": args.prompt,
-        "model": endpoint,
-        "mode": mode,
-        "seed": returned_seed,
-        "resolution": args.resolution,
-        "duration": args.duration,
-        "aspect_ratio": args.aspect_ratio,
-        "audio": not args.no_audio,
-        "camera_fixed": args.camera_fixed,
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode == "image-to-video" else [],
-        "end_image": str(Path(end_md_entry["path"])) if end_md_entry else None,
-        "fal_response": result,
-    }
-    with open(log_path, "w") as f:
-        json.dump(log_data, f, indent=2, default=str)
-
-    # Stdout for LLM parsing
-    print(f"FILENAME={video_filename} PROMPT={args.prompt} SEED={seed_display}")
+    finalize_generation_with_media_sync(
+        _write_video_artifacts(
+            video_path=video_path,
+            base_name=base_name,
+            video_filename=video_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            returned_seed=returned_seed,
+            input_md_entries=input_md_entries,
+            end_md_entry=end_md_entry,
+            result=result,
+        )
+    )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

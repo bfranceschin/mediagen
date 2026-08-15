@@ -10,6 +10,7 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 - **Start & end frame conditioning** for precise video transitions
 - **Native audio generation** synchronized with video
 - **Full persistence** — generated files, metadata (.md), and JSON logs
+- **Optional Hostkit Media sync** — receipts + one-shot upload after generate (Telegram contract unchanged)
 - **Reproducibility** — seed support for consistent results
 - **Web search grounding** (Nano Banana 2 only)
 - **Cinematic camera control** — dolly, pan, orbit, tripod mode
@@ -131,13 +132,32 @@ Generated outputs go to `~/.hermes/workspace/mediagen/`:
 ```
 images/
   raw/           → Generated PNG files
-  <base>.md      → One markdown file per image (embed + metadata)
+  <base>.md      → One markdown file per image (embed + metadata; local legacy)
 videos/
   raw/           → Generated MP4 files
-  <base>.md      → One markdown file per video (link + metadata)
+  <base>.md      → One markdown file per video (link + metadata; local legacy)
 external/        → Copies of user-provided input images
 logs/            → Structured JSON logs per generation
+receipts/        → Media sync receipts (optional Hostkit Media integration)
 ```
+
+### Optional Hostkit Media sync
+
+When configured, each successful generation creates a receipt and attempts one Media API sync after the file + JSON log are written. The stdout contract is unchanged:
+
+```text
+FILENAME=<filename> PROMPT=<prompt> SEED=<seed>
+```
+
+Media outages leave the binary/log/receipt intact and still exit `0`. Missing config disables sync (no error).
+
+```text
+MEDIA_API_URL=https://media.example.dev
+MEDIA_API_TOKEN_FILE=~/.hermes/secrets/media-api-token
+MEDIA_UPLOAD_TIMEOUT_SECONDS=180
+```
+
+Legacy markdown is never sent to Media as a canonical asset.
 
 ### Filename Convention
 
@@ -148,7 +168,7 @@ logs/            → Structured JSON logs per generation
 
 ```bash
 # Run unit tests (fast, no API calls, no cost)
-python -m pytest tests/test_unit.py -v
+python -m pytest tests/test_unit.py tests/test_media_client.py tests/test_mediagen_media_sync.py -q
 
 # Run integration tests (calls real fal.ai API — costs ~$0.01-0.26)
 python -m pytest tests/test_integration.py -v --run-integration
@@ -162,6 +182,8 @@ python -m pytest tests/ -v
 | File | Type | API calls? | Cost |
 |------|------|-----------|------|
 | `tests/test_unit.py` | Unit tests for pure functions | ❌ No | Free |
+| `tests/test_media_client.py` | Media client + receipts (mocked HTTP) | ❌ No | Free |
+| `tests/test_mediagen_media_sync.py` | Post-persist Media hook + FILENAME contract | ❌ No | Free |
 | `tests/test_integration.py` | Full pipeline with real API | ✅ Yes | ~$0.01-0.26 |
 
 Integration tests are **skipped by default** — only run when `--run-integration` flag is passed, so you never accidentally spend money.

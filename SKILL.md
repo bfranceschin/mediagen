@@ -211,13 +211,38 @@ All outputs go to `~/.hermes/workspace/mediagen/`:
 ```
 images/
   raw/           → Generated PNG files
-  <base>.md      → One markdown file per image (embed + metadata)
+  <base>.md      → One markdown file per image (embed + metadata; legacy local only)
 videos/
   raw/           → Generated MP4 files
-  <base>.md      → One markdown file per video (link + metadata)
+  <base>.md      → One markdown file per video (link + metadata; legacy local only)
 external/        → Copies of user-provided input images
 logs/            → Structured JSON logs per generation
+receipts/        → Durable Media sync receipts (when Media API is configured)
 ```
+
+Legacy `.md` sidecars are still written for local browsing compatibility. They are **never** uploaded to Hostkit Media as canonical assets.
+
+### Optional Hostkit Media sync
+
+After a successful generation (binary + JSON log on disk), mediagen may sync assets to Hostkit Media:
+
+1. Create a local receipt under `receipts/`
+2. Attempt one upload + generation-run POST (timeout `MEDIA_UPLOAD_TIMEOUT_SECONDS`, default 180)
+3. Always print the Telegram/Hermes contract on the last stdout line:
+   `FILENAME=<file> PROMPT=<prompt> SEED=<seed>`
+
+Media failures do **not** change generation exit code `0`. Missing Media config is a no-op (local generation/Telegram unchanged).
+
+```text
+MEDIA_API_URL=https://media.example.dev
+MEDIA_API_TOKEN_FILE=~/.hermes/secrets/media-api-token
+MEDIA_UPLOAD_TIMEOUT_SECONDS=180
+```
+
+Role mapping on generation-run inputs:
+
+- image edit: each `--inputs` path → `edit_source` by position
+- image-to-video: first `--inputs` → `start_frame`; `--end-image` → `end_frame`
 
 ### Filename Convention
 
