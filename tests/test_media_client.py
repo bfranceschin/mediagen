@@ -215,6 +215,60 @@ class TestUploadMultipart:
         assert metadata["ingested_via"] == "live_mediagen"
         assert metadata["show_in_grid"] is True
 
+    def test_http_json_sends_non_default_user_agent(self, tmp_path, monkeypatch):
+        secret = "tok-upload-123"
+        token_path = tmp_path / "token"
+        token_path.write_text(secret, encoding="utf-8")
+        cfg = media_client.load_config(
+            {
+                "MEDIA_API_URL": "https://media.example.test",
+                "MEDIA_API_TOKEN_FILE": str(token_path),
+            }
+        )
+
+        asset_rel = "images/raw/example.png"
+        asset_abs = tmp_path / asset_rel
+        asset_abs.parent.mkdir(parents=True)
+        asset_bytes = b"\x89PNG\r\n\x1a\n" + b"payload-bytes"
+        asset_abs.write_bytes(asset_bytes)
+
+        captured = {}
+
+        class FakeResponse:
+            def __init__(self):
+                self.status = 201
+                self.headers = {"Content-Type": "application/json"}
+
+            def read(self):
+                return json.dumps({"id": "med_abcdefghijklmnopqrstu"}).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["headers"] = {k: v for k, v in req.header_items()}
+            return FakeResponse()
+
+        monkeypatch.setattr(media_client.urllib.request, "urlopen", fake_urlopen)
+
+        media_client.upload_asset(
+            cfg,
+            workspace=tmp_path,
+            asset={
+                "path": asset_rel,
+                "kind": "image",
+                "idempotency_key": "mediagen:asset:images/raw/example.png",
+            },
+        )
+
+        headers_l = {k.lower(): v for k, v in captured["headers"].items()}
+        assert "user-agent" in headers_l
+        assert headers_l["user-agent"] == "hermes-mediagen/1.0"
+        assert not headers_l["user-agent"].lower().startswith("python-urllib")
+
 
 # ── helpers for sync-level tests ──────────────────────────────────────────────
 

@@ -23,6 +23,7 @@ from urllib.request import Request
 
 DEFAULT_RECEIPTS_DIR_NAME = "receipts"
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 180
+DEFAULT_USER_AGENT = "hermes-mediagen/1.0"
 SCHEMA_VERSION = 1
 
 
@@ -310,6 +311,7 @@ def _http_json(
     hdrs = {
         "Authorization": f"Bearer {cfg.token}",
         "Accept": "application/json",
+        "User-Agent": DEFAULT_USER_AGENT,
     }
     if content_type:
         hdrs["Content-Type"] = content_type
