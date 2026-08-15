@@ -159,6 +159,14 @@ MEDIA_UPLOAD_TIMEOUT_SECONDS=180
 
 Legacy markdown is never sent to Media as a canonical asset.
 
+### Historical backfill (G1)
+
+```bash
+python scripts/media_backfill.py --workspace ~/.hermes/workspace/mediagen --dry-run --report /tmp/backfill-report.json
+```
+
+Default is dry-run (no HTTP). `--apply` is opt-in and uses the same `MEDIA_API_URL` / `MEDIA_API_TOKEN_FILE` passthrough as live sync. See [docs/BACKFILL.md](docs/BACKFILL.md).
+
 ### Filename Convention
 
 **Images:** `<YYYYMMDD>_<HHMMSS>_<model>[_edit].{png,md,json}`
@@ -184,6 +192,7 @@ python -m pytest tests/ -v
 | `tests/test_unit.py` | Unit tests for pure functions | ❌ No | Free |
 | `tests/test_media_client.py` | Media client + receipts (mocked HTTP) | ❌ No | Free |
 | `tests/test_mediagen_media_sync.py` | Post-persist Media hook + FILENAME contract | ❌ No | Free |
+| `tests/test_media_backfill.py` | Backfill parser/reconciliation (mocked HTTP) | ❌ No | Free |
 | `tests/test_integration.py` | Full pipeline with real API | ✅ Yes | ~$0.01-0.26 |
 
 Integration tests are **skipped by default** — only run when `--run-integration` flag is passed, so you never accidentally spend money.

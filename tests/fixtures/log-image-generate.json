@@ -1,0 +1,11 @@
+{
+  "filename": "20260815T120000Z_flux2.png",
+  "prompt": "synthetic blue cube on a table",
+  "model": "fal-ai/flux-2",
+  "mode": "generate",
+  "seed": 42,
+  "width": 1024,
+  "height": 768,
+  "timestamp": "2026-08-15T12:00:00+00:00",
+  "inputs": []
+}

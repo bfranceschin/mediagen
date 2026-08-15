@@ -1,0 +1,14 @@
+{
+  "filename": "20260815T120100Z_nano2_edit.png",
+  "prompt": "synthetic merge two reference sketches",
+  "model": "fal-ai/nano-banana-2/edit",
+  "mode": "edit",
+  "seed": 7,
+  "width": 1024,
+  "height": 1024,
+  "timestamp": "2026-08-15T12:01:00+00:00",
+  "inputs": [
+    "external/ref_a.png",
+    "external/ref_b.png"
+  ]
+}

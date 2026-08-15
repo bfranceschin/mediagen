@@ -1,0 +1,17 @@
+{
+  "filename": "20260815T120200Z_seedance2_i2v.mp4",
+  "prompt": "synthetic camera push on a still frame",
+  "model": "fal-ai/bytedance/seedance/v1.5/pro/image-to-video",
+  "mode": "image-to-video",
+  "seed": 99,
+  "resolution": "720p",
+  "duration": 5,
+  "aspect_ratio": "16:9",
+  "audio": true,
+  "camera_fixed": false,
+  "timestamp": "2026-08-15T12:02:00+00:00",
+  "inputs": [
+    "external/start_frame.png"
+  ],
+  "end_image": "external/end_frame.png"
+}
