@@ -245,6 +245,7 @@ class TestBuildGrokImage2Args:
         assert result["aspect_ratio"] == "16:9"
         assert result["resolution"] == "1k"
         assert result["quality"] == "medium"
+        assert result["response_format"] == "b64_json"
         assert "image" not in result
         assert "images" not in result
 
@@ -753,12 +754,12 @@ class TestXaiProviderAndParse:
 
         saved = {}
 
-        def fake_download(url, dest):
+        def fake_download(url, dest, creds=None, timeout=None):
             saved["url"] = url
             dest.write_bytes(b"\x89PNG\r\n\x1a\nfake")
 
         monkeypatch.setattr(mediagen, "_xai_post_json", fake_post)
-        monkeypatch.setattr(mediagen, "download_file", fake_download)
+        monkeypatch.setattr(mediagen, "download_xai_media", fake_download)
         monkeypatch.setattr(mediagen, "finalize_generation_with_media_sync", lambda meta: None)
 
         args = MagicMock(
@@ -791,6 +792,45 @@ class TestXaiProviderAndParse:
         assert body["video"]["url"].endswith("clip.mp4")
         assert calls["n"] == 3
         assert sleeps == [1, 1]
+
+    def test_download_xai_media_sends_bearer(self, tmp_path, monkeypatch):
+        dest = tmp_path / "out.bin"
+        seen = {}
+
+        class FakeResp:
+            status_code = 200
+            content = b"media-bytes"
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, headers=None):
+                seen["url"] = url
+                seen["headers"] = headers
+                return FakeResp()
+
+        class FakeHttpx:
+            class Client(FakeClient):
+                pass
+
+        monkeypatch.setattr(mediagen, "_require_httpx", lambda: FakeHttpx)
+        mediagen.download_xai_media(
+            "https://imgen.x.ai/tmp.png",
+            dest,
+            {"api_key": "secret-token", "provider": "xai-oauth"},
+        )
+        assert dest.read_bytes() == b"media-bytes"
+        assert seen["headers"]["Authorization"] == "Bearer secret-token"
 
     def test_poll_video_stops_on_failed(self):
         body = mediagen.poll_xai_video(

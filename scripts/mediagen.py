@@ -497,6 +497,7 @@ def build_grokimage2_args(args, mode: str) -> dict:
         "aspect_ratio": width_height_to_grok_aspect(args.width, args.height),
         "resolution": width_height_to_grok_resolution(args.width, args.height),
         "quality": quality,
+        "response_format": "b64_json",
     }
     if mode == "edit":
         urls = list(getattr(args, "image_data_urls", None) or [])
@@ -866,7 +867,21 @@ def _xai_get_json(url: str, creds: dict, timeout: float) -> dict:
         sys.exit(1)
 
 
-# ── Codex / GPT Image 2 backend ──────────────────────────────────────────────
+def download_xai_media(url: str, dest: Path, creds: dict, timeout: float = 120.0) -> None:
+    """Download a temporary Imagine URL with the same bearer used for the API."""
+    httpx = _require_httpx()
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as http:
+            response = http.get(url, headers=_xai_headers(creds["api_key"]))
+            if response.status_code >= 400:
+                print(f"ERROR={_format_xai_http_error(response.status_code, response.text)}")
+                sys.exit(1)
+            dest.write_bytes(response.content)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"ERROR=Could not download xAI media: {exc}")
+        sys.exit(1)
 
 
 def _ensure_hermes_on_path():
@@ -1595,7 +1610,7 @@ def run_image_xai(args):
     kind, value = ref
     try:
         if kind == "url":
-            download_file(value, image_path)
+            download_xai_media(value, image_path, creds)
         else:
             image_path.write_bytes(base64.b64decode(value, validate=False))
     except Exception as exc:
@@ -1693,7 +1708,7 @@ def run_video_xai(args):
     video_filename = f"{base_name}.mp4"
     video_path = VIDEOS_RAW_DIR / video_filename
     try:
-        download_file(video_url.strip(), video_path)
+        download_xai_media(video_url.strip(), video_path, creds)
     except Exception as exc:
         print(f"ERROR=Could not save grokvideo output: {exc}")
         sys.exit(1)
