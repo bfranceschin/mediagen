@@ -158,6 +158,36 @@ def test_normalize_model_and_keep_endpoint_in_params(tmp_workspace):
     assert seed["params"]["endpoint"] == "fal-ai/bytedance/seedance/v1.5/pro/image-to-video"
 
 
+def test_map_xai_endpoint_to_grok_provider_and_model(tmp_workspace):
+    """xAI Imagine logs must not be tagged as fal."""
+    ws = tmp_workspace
+    img_name = "20260817T120000Z_grokimage2_low.png"
+    _write_bytes(ws / "images" / "raw" / img_name, _make_png())
+    (ws / "logs" / "log-grok-generate.json").write_text(
+        json.dumps(
+            {
+                "filename": img_name,
+                "prompt": "tiny blue square",
+                "model": "https://api.x.ai/v1/images/generations",
+                "mode": "generate",
+                "seed": None,
+                "width": 1280,
+                "height": 720,
+                "timestamp": "2026-08-17T12:00:00+00:00",
+                "inputs": [],
+                "provider": "xai-oauth",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = media_backfill.build_backfill_plan(ws)
+    run = plan.runs[0]
+    assert run["provider"] == "xai"
+    assert run["model"] == "grokimage2"
+    assert run["params"]["endpoint"] == "https://api.x.ai/v1/images/generations"
+
+
 # ── 4. Edit inputs → edit_source by position ─────────────────────────────────
 
 

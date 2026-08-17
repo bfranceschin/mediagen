@@ -83,6 +83,8 @@ def _parse_iso_utc(value: str | None) -> Optional[datetime]:
 def _provider_for_endpoint(endpoint: str) -> str:
     if "openai-codex" in endpoint or endpoint.startswith("openai"):
         return "openai-codex"
+    if "x.ai" in endpoint or endpoint.startswith("xai") or "grok-imagine" in endpoint:
+        return "xai"
     return "fal"
 
 
@@ -94,6 +96,9 @@ def _model_key_from_endpoint(endpoint: str) -> str:
         "fal-ai/nano-banana-2": "nano2",
         "fal-ai/nano-banana-2/edit": "nano2",
         "openai-codex/gpt-image-2": "gptimage2",
+        "https://api.x.ai/v1/images/generations": "grokimage2",
+        "https://api.x.ai/v1/images/edits": "grokimage2",
+        "https://api.x.ai/v1/videos/generations": "grokvideo",
         "fal-ai/bytedance/seedance/v1.5/pro/text-to-video": "seedance2",
         "fal-ai/bytedance/seedance/v1.5/pro/image-to-video": "seedance2",
     }
@@ -104,6 +109,9 @@ def _model_key_from_endpoint(endpoint: str) -> str:
         ("flux-2", "flux2"),
         ("nano-banana-2", "nano2"),
         ("gpt-image", "gptimage2"),
+        ("images/generations", "grokimage2"),
+        ("images/edits", "grokimage2"),
+        ("videos/generations", "grokvideo"),
         ("seedance", "seedance2"),
     ):
         if key in endpoint:

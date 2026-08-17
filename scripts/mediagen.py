@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mediagen.py — Image and video generation via fal.ai + ChatGPT Codex OAuth
+"""mediagen.py — Image and video generation via fal.ai, ChatGPT Codex OAuth, and xAI Grok Imagine
 
 Usage (image / fal.ai):
   python mediagen.py \
@@ -59,6 +59,7 @@ import os
 import shutil
 import signal
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,12 +89,18 @@ HERMES_AGENT_DIR = Path(
 
 FAL_IMAGE_MODELS = {"flux2", "nano2"}
 CODEX_IMAGE_MODELS = {"gptimage2"}
-IMAGE_MODELS = FAL_IMAGE_MODELS | CODEX_IMAGE_MODELS
-VIDEO_MODELS = {"seedance2"}
+XAI_IMAGE_MODELS = {"grokimage2"}
+IMAGE_MODELS = FAL_IMAGE_MODELS | CODEX_IMAGE_MODELS | XAI_IMAGE_MODELS
+XAI_VIDEO_MODELS = {"grokvideo"}
+VIDEO_MODELS = {"seedance2"} | XAI_VIDEO_MODELS
 
-VALID_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto"}
+VALID_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto", "3:2", "2:3"}
+SEEDANCE_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto"}
+GROK_VIDEO_ASPECT_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
 VALID_RESOLUTIONS = {"480p", "720p", "1080p"}
 VALID_GPT_QUALITIES = {"low", "medium", "high"}
+VALID_GROK_QUALITIES = {"low", "medium"}
+GROK_MAX_REFERENCE_IMAGES = 3
 
 MODEL_MAP = {
     "flux2": {
@@ -112,6 +119,14 @@ MODEL_MAP = {
         "text-to-video": "fal-ai/bytedance/seedance/v1.5/pro/text-to-video",
         "image-to-video": "fal-ai/bytedance/seedance/v1.5/pro/image-to-video",
     },
+    "grokimage2": {
+        "generate": "https://api.x.ai/v1/images/generations",
+        "edit": "https://api.x.ai/v1/images/edits",
+    },
+    "grokvideo": {
+        "text-to-video": "https://api.x.ai/v1/videos/generations",
+        "image-to-video": "https://api.x.ai/v1/videos/generations",
+    },
 }
 
 IMAGE_TIMEOUT_SECONDS = 120
@@ -120,6 +135,8 @@ VIDEO_TIMEOUT_SECONDS = 300
 
 # GPT Image 2 via Codex Responses API (mirrors Hermes openai-codex image plugin)
 GPT_IMAGE_API_MODEL = "gpt-image-2"
+GROK_IMAGE_API_MODEL = "grok-imagine-image-2.0"
+GROK_VIDEO_API_MODEL = "grok-imagine-video-1.5"
 CODEX_CHAT_MODEL = "gpt-5.5"
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_INSTRUCTIONS = (
@@ -193,9 +210,13 @@ def workspace_relpath(path: Path | str) -> str:
         return p.name
 
 
-def _provider_for_endpoint(endpoint: str) -> str:
+def _provider_for_endpoint(endpoint: str, auth_provider: Optional[str] = None) -> str:
+    if auth_provider in {"xai", "xai-oauth"}:
+        return auth_provider
     if "openai-codex" in endpoint or endpoint.startswith("openai"):
         return "openai-codex"
+    if "x.ai" in endpoint or endpoint.startswith("xai") or "grok-imagine" in endpoint:
+        return "xai"
     return "fal"
 
 
@@ -294,7 +315,7 @@ def build_media_sync_payload(
     generation: dict = {
         "tool": "mediagen",
         "operation": operation,
-        "provider": _provider_for_endpoint(endpoint),
+        "provider": _provider_for_endpoint(endpoint, gen_params.get("provider") or gen_params.get("auth_provider")),
         "model": model,
         "prompt": prompt,
         "seed": seed,
@@ -370,6 +391,43 @@ def width_height_to_gpt_aspect(width: int, height: int) -> str:
     return "square"
 
 
+GROK_IMAGE_ASPECTS = (
+    (1, 1, "1:1"),
+    (16, 9, "16:9"),
+    (9, 16, "9:16"),
+    (4, 3, "4:3"),
+    (3, 4, "3:4"),
+    (3, 2, "3:2"),
+    (2, 3, "2:3"),
+    (2, 1, "2:1"),
+    (1, 2, "1:2"),
+    (19.5, 9, "19.5:9"),
+    (9, 19.5, "9:19.5"),
+    (20, 9, "20:9"),
+    (9, 20, "9:20"),
+)
+
+
+def width_height_to_grok_aspect(width: int, height: int) -> str:
+    """Snap WxH onto the nearest Grok Imagine image aspect_ratio."""
+    if width <= 0 or height <= 0:
+        return "16:9"
+    target = width / height
+    best_label = "16:9"
+    best_err = float("inf")
+    for w, h, label in GROK_IMAGE_ASPECTS:
+        err = abs((w / h) - target)
+        if err < best_err:
+            best_err = err
+            best_label = label
+    return best_label
+
+
+def width_height_to_grok_resolution(width: int, height: int) -> str:
+    """1k unless the long edge is at least 1536 (then 2k)."""
+    return "2k" if max(width, height) >= 1536 else "1k"
+
+
 def build_flux2_args(args, mode: str) -> dict:
     """Build fal.ai API arguments for FLUX.2 models."""
     api_args = {
@@ -428,6 +486,44 @@ def build_seedance2_args(args, mode: str) -> dict:
     return api_args
 
 
+def build_grokimage2_args(args, mode: str) -> dict:
+    """Build xAI Imagine JSON body for grok-imagine-image-2.0."""
+    quality = getattr(args, "quality", "medium")
+    if not isinstance(quality, str):
+        quality = "medium"
+    api_args = {
+        "model": GROK_IMAGE_API_MODEL,
+        "prompt": args.prompt,
+        "aspect_ratio": width_height_to_grok_aspect(args.width, args.height),
+        "resolution": width_height_to_grok_resolution(args.width, args.height),
+        "quality": quality,
+    }
+    if mode == "edit":
+        urls = list(getattr(args, "image_data_urls", None) or [])
+        fields = [{"url": url, "type": "image_url"} for url in urls]
+        if len(fields) == 1:
+            api_args["image"] = fields[0]
+        elif len(fields) > 1:
+            api_args["images"] = fields
+    return api_args
+
+
+def build_grokvideo_args(args, mode: str) -> dict:
+    """Build xAI Imagine JSON body for grok-imagine-video-1.5."""
+    api_args = {
+        "model": GROK_VIDEO_API_MODEL,
+        "prompt": args.prompt,
+        "aspect_ratio": args.aspect_ratio,
+        "resolution": args.resolution,
+        "duration": int(args.duration),
+    }
+    if mode == "image-to-video":
+        image_url = getattr(args, "image_data_url", None)
+        if image_url:
+            api_args["image"] = {"url": image_url, "type": "image_url"}
+    return api_args
+
+
 def validate_args(args):
     """Validate argument combinations and exit with error if invalid."""
     model_key = args.model
@@ -435,6 +531,8 @@ def validate_args(args):
     is_image_model = model_key in IMAGE_MODELS
     is_codex_image = model_key in CODEX_IMAGE_MODELS
     is_fal_image = model_key in FAL_IMAGE_MODELS
+    is_xai_image = model_key in XAI_IMAGE_MODELS
+    is_xai_video = model_key in XAI_VIDEO_MODELS
 
     # MagicMock test doubles auto-create missing attrs; only honor real str quality.
     quality = getattr(args, "quality", "medium")
@@ -455,7 +553,7 @@ def validate_args(args):
             print("ERROR=--enable-web-search is not supported for video models.")
             sys.exit(1)
         if quality != "medium":
-            print("ERROR=--quality is only supported for gptimage2.")
+            print("ERROR=--quality is only supported for gptimage2 and grokimage2.")
             sys.exit(1)
 
     # Video-only args used with image model
@@ -482,7 +580,7 @@ def validate_args(args):
     # fal image-specific restrictions
     if is_fal_image:
         if quality != "medium":
-            print("ERROR=--quality is only supported for gptimage2.")
+            print("ERROR=--quality is only supported for gptimage2 and grokimage2.")
             sys.exit(1)
 
     # Codex image-specific restrictions
@@ -501,27 +599,67 @@ def validate_args(args):
             print(f"ERROR=gptimage2 edit mode supports at most {_MAX_REFERENCE_IMAGES} input images.")
             sys.exit(1)
 
+    # Grok Imagine image-specific restrictions
+    if is_xai_image:
+        if quality not in VALID_GROK_QUALITIES:
+            print(
+                "ERROR=--quality high is not supported for grokimage2. Use low or medium."
+                if quality == "high"
+                else f"ERROR=--quality must be one of {sorted(VALID_GROK_QUALITIES)} for grokimage2, got '{quality}'."
+            )
+            sys.exit(1)
+        if args.steps != 28:
+            print("ERROR=--steps is not supported for grokimage2.")
+            sys.exit(1)
+        if args.enable_web_search:
+            print("ERROR=--enable-web-search is not supported for grokimage2.")
+            sys.exit(1)
+        if args.inputs is not None and len(args.inputs) > GROK_MAX_REFERENCE_IMAGES:
+            print(
+                f"ERROR=grokimage2 edit mode supports at most {GROK_MAX_REFERENCE_IMAGES} input images."
+            )
+            sys.exit(1)
+
     # Video-specific validations
     if is_video_model:
-        # Duration range
-        if args.duration < 4 or args.duration > 12:
-            print(f"ERROR=--duration must be between 4 and 12 seconds, got {args.duration}.")
-            sys.exit(1)
+        if is_xai_video:
+            if args.duration < 1 or args.duration > 15:
+                print(f"ERROR=--duration must be between 1 and 15 seconds for grokvideo, got {args.duration}.")
+                sys.exit(1)
+            if args.end_image is not None:
+                print("ERROR=--end-image is not supported for grokvideo.")
+                sys.exit(1)
+            if args.camera_fixed:
+                print("ERROR=--camera-fixed is not supported for grokvideo.")
+                sys.exit(1)
+            if args.no_audio:
+                print("ERROR=--no-audio is not supported for grokvideo.")
+                sys.exit(1)
+            if args.aspect_ratio not in GROK_VIDEO_ASPECT_RATIOS:
+                print(
+                    f"ERROR=--aspect-ratio must be one of {sorted(GROK_VIDEO_ASPECT_RATIOS)} for grokvideo, got '{args.aspect_ratio}'."
+                )
+                sys.exit(1)
+        else:
+            if args.duration < 4 or args.duration > 12:
+                print(f"ERROR=--duration must be between 4 and 12 seconds, got {args.duration}.")
+                sys.exit(1)
+            if args.aspect_ratio not in SEEDANCE_ASPECT_RATIOS:
+                print(
+                    f"ERROR=--aspect-ratio must be one of {sorted(SEEDANCE_ASPECT_RATIOS)}, got '{args.aspect_ratio}'."
+                )
+                sys.exit(1)
         # Resolution
         if args.resolution not in VALID_RESOLUTIONS:
             print(f"ERROR=--resolution must be one of {VALID_RESOLUTIONS}, got '{args.resolution}'.")
-            sys.exit(1)
-        # Aspect ratio
-        if args.aspect_ratio not in VALID_ASPECT_RATIOS:
-            print(f"ERROR=--aspect-ratio must be one of {VALID_ASPECT_RATIOS}, got '{args.aspect_ratio}'.")
             sys.exit(1)
         # Image-to-video: inputs must have exactly one image
         if args.inputs is not None:
             if len(args.inputs) != 1:
                 print("ERROR=Video image-to-video requires exactly one input image (--inputs <path>).")
                 sys.exit(1)
-        # End image without start image
-        if args.end_image is not None and args.inputs is None:
+        # End image without start image (seedance only; grok already rejected end_image)
+        if not is_xai_video and args.end_image is not None and args.inputs is None:
             print("ERROR=--end-image requires --inputs (start frame) to be provided.")
             sys.exit(1)
 
@@ -530,6 +668,202 @@ def validate_args(args):
         if args.inputs is not None and len(args.inputs) > 4:
             print("ERROR=Image edit mode supports at most 4 input images.")
             sys.exit(1)
+
+
+# ── xAI / Grok Imagine auth + parse ──────────────────────────────────────────
+
+
+def extract_xai_image_ref(payload: dict) -> Optional[Tuple[str, str]]:
+    """Return ('url'|'b64', value) from an Imagine images response, or None."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0] if isinstance(data[0], dict) else {}
+    url = first.get("url")
+    if isinstance(url, str) and url.strip():
+        return ("url", url.strip())
+    b64 = first.get("b64_json")
+    if isinstance(b64, str) and b64.strip():
+        return ("b64", b64.strip())
+    return None
+
+
+def sanitize_xai_image_log(payload: dict) -> dict:
+    """Drop raw b64 from logs; keep url/metadata only."""
+    if not isinstance(payload, dict):
+        return {}
+    out = dict(payload)
+    data = out.get("data")
+    if isinstance(data, list):
+        cleaned = []
+        for item in data:
+            if isinstance(item, dict):
+                row = {k: v for k, v in item.items() if k != "b64_json"}
+                if "b64_json" in item:
+                    row["b64_json"] = True
+                cleaned.append(row)
+            else:
+                cleaned.append(item)
+        out["data"] = cleaned
+    return out
+
+
+def xai_video_status(payload: dict) -> str:
+    return str((payload or {}).get("status") or "").strip().lower()
+
+
+def poll_xai_video(
+    request_id: str,
+    *,
+    get_json,
+    sleeper,
+    interval: int = 5,
+    timeout_seconds: int = VIDEO_TIMEOUT_SECONDS,
+) -> dict:
+    """Poll GET /v1/videos/{request_id} until done|failed|expired or timeout."""
+    elapsed = 0
+    last: dict = {}
+    while elapsed < timeout_seconds:
+        last = get_json(request_id) or {}
+        status = xai_video_status(last)
+        if status == "done" or status in {"failed", "expired", "error", "cancelled"}:
+            return last
+        sleeper(interval)
+        elapsed += interval
+    timed_out = dict(last)
+    timed_out["status"] = "timeout"
+    return timed_out
+
+
+def _try_xai_http_credentials() -> Optional[dict]:
+    """Hermes standard: OAuth pool first, then XAI_API_KEY."""
+    _ensure_hermes_on_path()
+    try:
+        from tools.xai_http import resolve_xai_http_credentials
+
+        creds = resolve_xai_http_credentials() or {}
+    except Exception:
+        return None
+    api_key = str(creds.get("api_key") or "").strip()
+    if not api_key:
+        return None
+    return {
+        "provider": str(creds.get("provider") or "xai").strip() or "xai",
+        "api_key": api_key,
+        "base_url": str(creds.get("base_url") or "https://api.x.ai/v1").strip().rstrip("/"),
+    }
+
+
+def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
+    _ensure_hermes_on_path()
+    try:
+        from hermes_cli.auth import resolve_xai_oauth_runtime_credentials
+
+        creds = resolve_xai_oauth_runtime_credentials() or {}
+    except Exception:
+        return None
+    api_key = str(creds.get("api_key") or creds.get("access_token") or "").strip()
+    if not api_key:
+        return None
+    return {
+        "provider": "xai-oauth",
+        "api_key": api_key,
+        "base_url": str(creds.get("base_url") or "https://api.x.ai/v1").strip().rstrip("/"),
+    }
+
+
+def resolve_xai_credentials() -> dict:
+    """OAuth first (Hermes helpers), then XAI_API_KEY. Always via Hermes venv."""
+    for loader in (_try_xai_http_credentials, _try_xai_oauth_runtime_credentials):
+        creds = loader()
+        if creds and creds.get("api_key"):
+            return creds
+    api_key = str(os.environ.get("XAI_API_KEY") or "").strip()
+    base_url = str(os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1").strip().rstrip("/")
+    return {"provider": "xai", "api_key": api_key, "base_url": base_url or "https://api.x.ai/v1"}
+
+
+def require_xai_credentials() -> dict:
+    creds = resolve_xai_credentials()
+    if not creds.get("api_key"):
+        print(
+            "ERROR=No xAI credentials. Run: hermes auth add xai-oauth --type oauth "
+            "(or set XAI_API_KEY). Use Hermes venv Python."
+        )
+        sys.exit(1)
+    return creds
+
+
+def _require_httpx():
+    try:
+        import httpx
+        return httpx
+    except ImportError:
+        print(
+            "ERROR=httpx not installed. Use Hermes venv: "
+            f"{HERMES_HOME}/hermes-agent/venv/bin/python {Path(__file__).resolve()}"
+        )
+        sys.exit(1)
+
+
+def _xai_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "hermes-mediagen/grok-imagine",
+    }
+
+
+def _format_xai_http_error(status_code: int, body: str) -> str:
+    msg = (body or "")[:500]
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or err.get("error") or msg)
+        elif isinstance(err, str) and err.strip():
+            msg = err.strip()
+        elif payload.get("code"):
+            msg = f"{payload.get('code')}: {payload.get('error') or msg}"
+    hint = ""
+    if status_code in {401, 403}:
+        hint = " Check hermes auth add xai-oauth / XAI_API_KEY and quota."
+    return f"xAI API HTTP {status_code}: {msg}{hint}"
+
+
+def _xai_post_json(url: str, payload: dict, creds: dict, timeout: float) -> dict:
+    httpx = _require_httpx()
+    try:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.post(url, headers=_xai_headers(creds["api_key"]), json=payload)
+            if response.status_code >= 400:
+                print(f"ERROR={_format_xai_http_error(response.status_code, response.text)}")
+                sys.exit(1)
+            return response.json()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"ERROR=xAI request failed: {exc}")
+        sys.exit(1)
+
+
+def _xai_get_json(url: str, creds: dict, timeout: float) -> dict:
+    httpx = _require_httpx()
+    try:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.get(url, headers=_xai_headers(creds["api_key"]))
+            if response.status_code >= 400:
+                print(f"ERROR={_format_xai_http_error(response.status_code, response.text)}")
+                sys.exit(1)
+            return response.json()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"ERROR=xAI request failed: {exc}")
+        sys.exit(1)
 
 
 # ── Codex / GPT Image 2 backend ──────────────────────────────────────────────
@@ -648,7 +982,7 @@ def _local_image_to_data_url(path: str) -> str:
     raw = p.read_bytes()
     mime = _sniff_image_mime(raw)
     if mime is None or mime not in _ACCEPTED_INPUT_MIME:
-        raise ValueError(f"Unsupported image format for gptimage2: {path}")
+        raise ValueError(f"Unsupported image format: {path}")
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
@@ -923,6 +1257,10 @@ def _write_image_artifacts(
         params["quality"] = log_extra["quality"]
     if "aspect" in log_extra:
         params["aspect"] = log_extra["aspect"]
+    if "provider" in log_extra:
+        params["provider"] = log_extra["provider"]
+    if "resolution" in log_extra:
+        params["resolution"] = log_extra["resolution"]
 
     return {
         "kind": "image",
@@ -954,6 +1292,7 @@ def _write_video_artifacts(
     input_md_entries: List[dict],
     end_md_entry: Optional[dict],
     result: dict,
+    log_extra: Optional[dict] = None,
 ) -> dict:
     """Persist video markdown + JSON log. Returns metadata for Media sync + FILENAME print."""
     md_path = VIDEOS_DIR / f"{base_name}.md"
@@ -1022,8 +1361,13 @@ Camera fixed: {camera_str}
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode == "image-to-video" else [],
         "end_image": str(Path(end_md_entry["path"])) if end_md_entry else None,
-        "fal_response": result,
     }
+    extra = dict(log_extra or {})
+    if extra.get("provider") in {"xai", "xai-oauth"}:
+        log_data["xai_response"] = extra.pop("xai_response", result)
+    else:
+        log_data["fal_response"] = result
+    log_data.update(extra)
     with open(log_path, "w") as f:
         json.dump(log_data, f, indent=2, default=str)
 
@@ -1036,6 +1380,9 @@ Camera fixed: {camera_str}
         "audio": not args.no_audio,
         "camera_fixed": args.camera_fixed,
     }
+    extra = dict(log_extra or {})
+    if extra.get("provider"):
+        params["provider"] = extra["provider"]
     return {
         "kind": "video",
         "filename": video_filename,
@@ -1212,18 +1559,172 @@ def run_image_codex(args):
     )
 
 
+def run_image_xai(args):
+    """Execute Grok Imagine image generate/edit via xAI HTTP API."""
+    ensure_dirs(media_type="image")
+    creds = require_xai_credentials()
+    mode = "edit" if args.inputs else "generate"
+    base_url = creds.get("base_url") or "https://api.x.ai/v1"
+    endpoint = f"{base_url}/images/edits" if mode == "edit" else f"{base_url}/images/generations"
+    quality = args.quality if isinstance(getattr(args, "quality", None), str) else "medium"
+
+    input_md_entries = []
+    data_urls: List[str] = []
+    if args.inputs:
+        for inp in args.inputs:
+            local_copy = copy_to_external(inp)
+            input_md_entries.append({"path": str(local_copy), "original": inp})
+            try:
+                data_urls.append(_local_image_to_data_url(str(local_copy)))
+            except Exception as exc:
+                print(f"ERROR=Invalid image input for grokimage2: {exc}")
+                sys.exit(1)
+    args.image_data_urls = data_urls
+    payload = build_grokimage2_args(args, mode)
+    result = _xai_post_json(endpoint, payload, creds, float(CODEX_IMAGE_TIMEOUT_SECONDS))
+    ref = extract_xai_image_ref(result)
+    if ref is None:
+        print("ERROR=xAI image response contained neither url nor b64_json")
+        sys.exit(1)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    edit_suffix = "_edit" if mode == "edit" else ""
+    base_name = f"{timestamp}_grokimage2_{quality}{edit_suffix}"
+    image_filename = f"{base_name}.png"
+    image_path = RAW_DIR / image_filename
+    kind, value = ref
+    try:
+        if kind == "url":
+            download_file(value, image_path)
+        else:
+            image_path.write_bytes(base64.b64decode(value, validate=False))
+    except Exception as exc:
+        print(f"ERROR=Could not save grokimage2 output: {exc}")
+        sys.exit(1)
+
+    aspect = payload.get("aspect_ratio")
+    resolution = payload.get("resolution")
+    size_str = f"{aspect} {resolution} (quality={quality})"
+    finalize_generation_with_media_sync(
+        _write_image_artifacts(
+            image_path=image_path,
+            base_name=base_name,
+            image_filename=image_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            seed_display="n/a",
+            size_str=size_str,
+            input_md_entries=input_md_entries,
+            log_extra={
+                "provider": creds.get("provider") or "xai",
+                "api_model": GROK_IMAGE_API_MODEL,
+                "quality": quality,
+                "aspect": aspect,
+                "resolution": resolution,
+                "xai_response": sanitize_xai_image_log(result),
+            },
+        )
+    )
+
+
 def run_image(args):
-    """Route image models to fal.ai or Codex backends."""
+    """Route image models to fal.ai, Codex, or xAI backends."""
     if args.model in CODEX_IMAGE_MODELS:
         run_image_codex(args)
+    elif args.model in XAI_IMAGE_MODELS:
+        run_image_xai(args)
     else:
         run_image_fal(args)
 
 
 # ── Video pipeline ───────────────────────────────────────────────────────────
 
+def run_video_xai(args):
+    """Execute Grok Imagine video t2v/i2v via xAI HTTP API."""
+    ensure_dirs(media_type="video")
+    creds = require_xai_credentials()
+    mode = "image-to-video" if args.inputs else "text-to-video"
+    base_url = creds.get("base_url") or "https://api.x.ai/v1"
+    endpoint = f"{base_url}/videos/generations"
+
+    input_md_entries = []
+    image_data_url = None
+    if args.inputs:
+        local_copy = copy_to_external(args.inputs[0])
+        input_md_entries.append({"path": str(local_copy), "original": args.inputs[0]})
+        try:
+            image_data_url = _local_image_to_data_url(str(local_copy))
+        except Exception as exc:
+            print(f"ERROR=Invalid start frame for grokvideo: {exc}")
+            sys.exit(1)
+    args.image_data_url = image_data_url
+    payload = build_grokvideo_args(args, mode)
+    submitted = _xai_post_json(endpoint, payload, creds, 60.0)
+    request_id = submitted.get("request_id") if isinstance(submitted, dict) else None
+    if not request_id:
+        print("ERROR=xAI video response did not include request_id")
+        sys.exit(1)
+
+    def _get_status(_rid: str) -> dict:
+        return _xai_get_json(f"{base_url}/videos/{request_id}", creds, 30.0)
+
+    result = poll_xai_video(
+        str(request_id),
+        get_json=_get_status,
+        sleeper=time.sleep,
+        interval=5,
+        timeout_seconds=VIDEO_TIMEOUT_SECONDS,
+    )
+    status = xai_video_status(result)
+    if status != "done":
+        print(f"ERROR=xAI video generation {status or 'failed'}: {str(result)[:400]}")
+        sys.exit(1)
+    video_obj = result.get("video") if isinstance(result, dict) else None
+    video = video_obj if isinstance(video_obj, dict) else {}
+    video_url = video.get("url")
+    if not isinstance(video_url, str) or not video_url.strip():
+        print("ERROR=xAI video response contained no video.url")
+        sys.exit(1)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    i2v_suffix = "_i2v" if mode == "image-to-video" else ""
+    base_name = f"{timestamp}_grokvideo{i2v_suffix}"
+    video_filename = f"{base_name}.mp4"
+    video_path = VIDEOS_RAW_DIR / video_filename
+    try:
+        download_file(video_url.strip(), video_path)
+    except Exception as exc:
+        print(f"ERROR=Could not save grokvideo output: {exc}")
+        sys.exit(1)
+
+    finalize_generation_with_media_sync(
+        _write_video_artifacts(
+            video_path=video_path,
+            base_name=base_name,
+            video_filename=video_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            returned_seed="n/a",
+            input_md_entries=input_md_entries,
+            end_md_entry=None,
+            result=result,
+            log_extra={
+                "provider": creds.get("provider") or "xai",
+                "api_model": GROK_VIDEO_API_MODEL,
+                "request_id": request_id,
+                "xai_response": result,
+            },
+        )
+    )
+
+
 def run_video(args):
     """Execute video generation pipeline (text-to-video or image-to-video)."""
+    if args.model in XAI_VIDEO_MODELS:
+        run_video_xai(args)
+        return
     fal_client = require_fal_client()
     ensure_dirs(media_type="video")
 
@@ -1322,20 +1823,20 @@ def main():
     parser.add_argument("--width", type=int, default=1280, help="Output width — image only (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Output height — image only (default: 720)")
     parser.add_argument("--steps", type=int, default=28, help="Inference steps — flux2 only (default: 28)")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random; ignored by gptimage2)")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random; ignored by gptimage2 and grok)")
     parser.add_argument("--enable-web-search", action="store_true", help="Enable web search — nano2 only")
     parser.add_argument(
         "--quality",
         default="medium",
         choices=sorted(VALID_GPT_QUALITIES),
-        help="GPT Image 2 quality tier — gptimage2 only (default: medium)",
+        help="Image quality — gptimage2: low|medium|high; grokimage2: low|medium (default: medium)",
     )
 
     # Video args
     parser.add_argument("--end-image", default=None, help="End frame image — seedance2 image-to-video only")
     parser.add_argument("--resolution", default="720p", choices=VALID_RESOLUTIONS, help="Video resolution (default: 720p)")
-    parser.add_argument("--aspect-ratio", default="16:9", choices=VALID_ASPECT_RATIOS, help="Video aspect ratio (default: 16:9)")
-    parser.add_argument("--duration", type=int, default=5, help="Video duration in seconds, 4-12 (default: 5)")
+    parser.add_argument("--aspect-ratio", default="16:9", choices=sorted(VALID_ASPECT_RATIOS), help="Video aspect ratio (default: 16:9)")
+    parser.add_argument("--duration", type=int, default=5, help="Video duration in seconds (seedance 4-12, grokvideo 1-15; default: 5)")
     parser.add_argument("--camera-fixed", action="store_true", help="Lock camera position — video only")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio generation — video only")
 

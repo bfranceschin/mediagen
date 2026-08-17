@@ -1,6 +1,6 @@
 # mediagen
 
-Image and video generation skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — powered by [fal.ai](https://fal.ai) plus optional GPT Image 2 via ChatGPT/Codex OAuth.
+Image and video generation skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — powered by [fal.ai](https://fal.ai), optional GPT Image 2 via ChatGPT/Codex OAuth, and optional Grok Imagine via xAI.
 
 ## Features
 
@@ -22,8 +22,10 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 | FLUX.2 [dev] | `flux2` | `fal-ai/flux-2` | High-quality photorealistic/artistic images | ~$0.012/MP |
 | Nano Banana 2 | `nano2` | `fal-ai/nano-banana-2` | Text rendering, complex composition, web grounding | ~$0.05/image |
 | GPT Image 2 | `gptimage2` | ChatGPT/Codex OAuth (`openai-codex/gpt-image-2`) | GPT Image 2 without OpenAI API key; quality tiers low/medium/high | ChatGPT quota |
+| Grok Imagine Image 2.0 | `grokimage2` | `https://api.x.ai/v1/images/generations` | Grok image generate/edit; quality low/medium; 1k/2k | SuperGrok / `XAI_API_KEY` |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | Animating images with start/end frame control | ~$0.26/5s@720p |
+| Grok Imagine Video 1.5 | `grokvideo` | `https://api.x.ai/v1/videos/generations` | Text-to-video and image-to-video (1 start frame); 1–15s | SuperGrok / `XAI_API_KEY` |
 
 ## Usage
 
@@ -56,6 +58,25 @@ Requires `hermes auth add openai-codex` and Hermes venv Python (`httpx` + token 
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py   --model gptimage2   --prompt "make the sunglasses orange"   --inputs /path/to/image.png   --quality low
+```
+
+### Grok Imagine (xAI OAuth or XAI_API_KEY)
+
+Requires Hermes venv Python. Prefers `hermes auth add xai-oauth`; falls back to `XAI_API_KEY`. Do not change Hermes `image_gen.provider` / `video_gen.provider`.
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model grokimage2 \
+  --prompt "a tiny flat blue square icon" \
+  --quality low \
+  --width 1280 --height 720
+```
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model grokvideo \
+  --prompt "a red ball bouncing once on a white floor" \
+  --duration 5 --aspect-ratio 16:9 --resolution 720p
 ```
 
 ### Video — Text to Video
@@ -94,7 +115,7 @@ python3 scripts/mediagen.py \
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, or `seedance2` |
+| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedance2`, or `grokvideo` |
 | `--prompt` | Yes | — | Text prompt or edit instruction |
 | `--inputs` | No | — | Input images: 1-4 for image edit, exactly 1 for video |
 | `--seed` | No | random | Reproducibility seed |
@@ -108,22 +129,24 @@ python3 scripts/mediagen.py \
 | `--steps` | 28 | Inference steps (flux2 only) |
 | `--enable-web-search` | false | Web search grounding (nano2 only) |
 
-### Video-only (seedance2)
+### Video-only
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--end-image` | — | End frame image (image-to-video only, optional) |
+| `--end-image` | — | End frame image (seedance2 i2v only) |
 | `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
-| `--aspect-ratio` | `16:9` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto` |
-| `--duration` | 5 | Video length in seconds (4-12) |
-| `--camera-fixed` | false | Lock camera position (tripod mode) |
-| `--no-audio` | false | Disable audio generation |
+| `--aspect-ratio` | `16:9` | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3` |
+| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
+| `--camera-fixed` | false | Lock camera (seedance2 only) |
+| `--no-audio` | false | Disable audio (seedance2 only) |
 
 ## Requirements
 
 - Python 3.11+
-- `fal_client` (`pip install fal-client`)
-- `FAL_KEY` environment variable set
+- `fal_client` (`pip install fal-client`) for fal models
+- `FAL_KEY` for `flux2`/`nano2`/`seedance2`
+- Hermes venv + `hermes auth add openai-codex` for `gptimage2`
+- Hermes venv + `hermes auth add xai-oauth` or `XAI_API_KEY` for `grokimage2`/`grokvideo`
 
 ## File Structure
 

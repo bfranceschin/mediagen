@@ -1,6 +1,6 @@
 ---
 name: mediagen
-description: "Generate and edit images/videos via fal.ai (FLUX.2, Nano Banana 2, Seedance) and GPT Image 2 via ChatGPT/Codex OAuth. Script handles API calls, file I/O, logging, and .md creation. Use this skill instead of the native image_generate tool unless the user explicitly asks for it."
+description: "Generate and edit images/videos via fal.ai (FLUX.2, Nano Banana 2, Seedance), GPT Image 2 via ChatGPT/Codex OAuth, and Grok Imagine via xAI (grokimage2 / grokvideo). Script handles API calls, file I/O, logging, and .md creation. Use this skill instead of the native image_generate tool unless the user explicitly asks for it."
 repository: https://github.com/bfranceschin/mediagen
 ---
 
@@ -11,11 +11,14 @@ Generate and edit images and videos with full persistence, logging, and edit sup
 **Backends:**
 - **fal.ai** (`FAL_KEY`): `flux2`, `nano2`, `seedance2`
 - **ChatGPT/Codex OAuth** (no OpenAI API key): `gptimage2`
+- **xAI Grok Imagine** (OAuth first, then `XAI_API_KEY`): `grokimage2`, `grokvideo`
 
-Default stack stays on fal.ai. Use `gptimage2` when you want GPT Image 2 via the Hermes ChatGPT auth. Do not silently switch Hermes global `image_gen.provider` just to use mediagen `gptimage2` — the skill talks to Codex directly.
+Default stack stays on fal.ai. Use `gptimage2` / `grokimage2` / `grokvideo` only when the user asks for those models. Do not silently switch Hermes global `image_gen.provider` or `video_gen.provider`.
 
 ### Support files
 - `references/gptimage2-codex.md` — Codex OAuth API surface, sizes/quality, smoke-test without touching global image_gen, failure table
+- `references/grok-imagine-xai.md` — xAI OAuth/API key, Imagine params, smoke-test without touching global providers, failure table
+- `docs/FUTURE.md` — Grok features deliberately not in this CLI (reference-to-video, video edit/extend)
 
 ## When to Use
 
@@ -31,7 +34,7 @@ PYTHON=~/.hermes/hermes-agent/venv/bin/python
 SCRIPT=~/.hermes/skills/media/mediagen/scripts/mediagen.py
 
 $PYTHON $SCRIPT \
-  --model <flux2|nano2|gptimage2> \
+  --model <flux2|nano2|gptimage2|grokimage2> \
   --prompt "your prompt here" \
   [--width 1280] [--height 720] \
   [--steps 28] [--seed 42] \
@@ -43,7 +46,7 @@ $PYTHON $SCRIPT \
 
 ```bash
 $PYTHON $SCRIPT \
-  --model <flux2|nano2|gptimage2> \
+  --model <flux2|nano2|gptimage2|grokimage2> \
   --prompt "edit instruction here" \
   --inputs /path/to/image1.png [/path/to/image2.png ...] \
   [--width 1280] [--height 720] \
@@ -56,7 +59,7 @@ $PYTHON $SCRIPT \
 
 ```bash
 $PYTHON $SCRIPT \
-  --model seedance2 \
+  --model <seedance2|grokvideo> \
   --prompt "your video prompt here" \
   [--resolution 720p] [--aspect-ratio 16:9] \
   [--duration 5] [--seed 42] \
@@ -67,7 +70,7 @@ $PYTHON $SCRIPT \
 
 ```bash
 $PYTHON $SCRIPT \
-  --model seedance2 \
+  --model <seedance2|grokvideo> \
   --prompt "motion and sound description" \
   --inputs /path/to/start_frame.png \
   [--end-image /path/to/end_frame.png] \
@@ -82,31 +85,31 @@ $PYTHON $SCRIPT \
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, or `seedance2` |
+| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedance2`, or `grokvideo` |
 | `--prompt` | Yes | — | Text prompt or edit instruction |
-| `--inputs` | No | — | Input images: 1-4 for fal image edit, up to 16 for gptimage2 edit, exactly 1 for image-to-video |
-| `--seed` | No | random | Reproducibility seed (fal/video only; ignored by gptimage2) |
+| `--inputs` | No | — | Input images: 1-4 for fal image edit, up to 16 for gptimage2 edit, up to 3 for grokimage2 edit, exactly 1 for image-to-video |
+| `--seed` | No | random | Reproducibility seed (fal/seedance only; ignored by gptimage2 and Grok) |
 
 ### Image-only
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--width` | 1280 | Output width in pixels (fal exact; gptimage2 mapped to fixed sizes) |
+| `--width` | 1280 | Output width in pixels (fal exact; gptimage2/grokimage2 mapped) |
 | `--height` | 720 | Output height in pixels |
 | `--steps` | 28 | Inference steps (**flux2 only**) |
 | `--enable-web-search` | false | Web search grounding (**nano2 only**) |
-| `--quality` | `medium` | GPT Image 2 tier: `low` / `medium` / `high` (**gptimage2 only**) |
+| `--quality` | `medium` | gptimage2: `low`/`medium`/`high`; grokimage2: `low`/`medium` (**high rejected**) |
 
-### Video-only (seedance2)
+### Video-only
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--end-image` | — | End frame image (image-to-video only, optional) |
+| `--end-image` | — | End frame image (**seedance2** i2v only; rejected by grokvideo) |
 | `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
-| `--aspect-ratio` | `16:9` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto` |
-| `--duration` | 5 | Video length in seconds (4-12) |
-| `--camera-fixed` | false | Lock camera position (tripod mode) |
-| `--no-audio` | false | Disable audio generation |
+| `--aspect-ratio` | `16:9` | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3`, not `21:9`/`auto` |
+| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
+| `--camera-fixed` | false | Lock camera (**seedance2** only; rejected by grokvideo) |
+| `--no-audio` | false | Disable audio (**seedance2** only; rejected by grokvideo) |
 
 ## Models
 
@@ -139,6 +142,27 @@ $PYTHON $SCRIPT \
 - **Runtime:** always use Hermes venv Python so Codex token helpers + `httpx` resolve:
   `~/.hermes/hermes-agent/venv/bin/python`
 
+### Grok Imagine Image — `grokimage2`
+- **Backend:** xAI (`xai-oauth` first, then `XAI_API_KEY`). **Not fal.ai**
+- **API model:** `grok-imagine-image-2.0`
+- **Endpoints:** `https://api.x.ai/v1/images/generations` / `.../images/edits`
+- **Auth prerequisite:** `hermes auth add xai-oauth --type oauth` (or `XAI_API_KEY`)
+- **Quality:** `--quality low|medium` (default `medium`). `high` → ERROR
+- **Sizes:** `--width/--height` mapped to Imagine `aspect_ratio`; long edge ≥1536 → `2k`, else `1k`. `1280×720` → `16:9` / `1k`
+- **Edit:** `--inputs` as data URLs, up to 3
+- **Seed:** not supported (`SEED=n/a`)
+- **Runtime:** Hermes venv Python
+
+### Grok Imagine Video — `grokvideo`
+- **Backend:** xAI (`xai-oauth` first, then `XAI_API_KEY`). **Not fal.ai**
+- **API model:** `grok-imagine-video-1.5`
+- **Endpoints:** `POST https://api.x.ai/v1/videos/generations` + poll `GET /v1/videos/{request_id}`
+- **Modes:** text-to-video, or image-to-video with exactly 1 start frame
+- **Duration:** 1–15 seconds
+- **Rejected flags:** `--end-image`, `--camera-fixed`, `--no-audio`
+- **Seed:** not supported (`SEED=n/a`)
+- **Download immediately:** result URLs expire
+
 ### Seedance 1.5 Pro — `seedance2`
 - **Backend:** fal.ai
 - **Endpoints:** `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` / `.../image-to-video`
@@ -149,8 +173,8 @@ $PYTHON $SCRIPT \
 ## Type Inference
 
 The script automatically determines image vs video mode from the `--model` argument:
-- `flux2`, `nano2`, or `gptimage2` → **image** mode
-- `seedance2` → **video** mode
+- `flux2`, `nano2`, `gptimage2`, or `grokimage2` → **image** mode
+- `seedance2` or `grokvideo` → **video** mode
 
 No `--type` argument needed.
 
@@ -161,9 +185,11 @@ No `--type` argument needed.
 | Default quality, cheap iterations | `flux2` |
 | Text in image / hard composition / spatial edits | `nano2` |
 | GPT Image 2 via ChatGPT auth (no fal charge) | `gptimage2` |
-| Video | `seedance2` |
+| Grok Imagine image via xAI | `grokimage2` |
+| Video (default fal) | `seedance2` |
+| Grok Imagine video via xAI | `grokvideo` |
 
-Keep fal as default while credits remain; pick `gptimage2` explicitly when desired.
+Keep fal as default while credits remain; pick `gptimage2` / `grokimage2` / `grokvideo` explicitly when desired.
 
 ## Output Parsing
 
@@ -171,14 +197,17 @@ Keep fal as default while credits remain; pick `gptimage2` explicitly when desir
 ```
 FILENAME=20260417_090400_flux2.png PROMPT=a cute puppy SEED=12345
 FILENAME=20260718_233100_gptimage2_low.png PROMPT=a green frog SEED=n/a
+FILENAME=20260817_120000_grokimage2_low.png PROMPT=a blue square SEED=n/a
 FILENAME=20260417_090400_seedance2.mp4 PROMPT=a bouncing ball SEED=12345
 FILENAME=20260417_090400_seedance2_i2v.mp4 PROMPT=the ball bounces SEED=12345
+FILENAME=20260817_120100_grokvideo.mp4 PROMPT=a bouncing ball SEED=n/a
 ```
 
 ### Error (exit 1)
 ```
 ERROR=Timeout after 300s. Try again or use a different model.
 ERROR=No ChatGPT/Codex OAuth credentials. Run: hermes auth add openai-codex --no-browser
+ERROR=No xAI credentials. Run: hermes auth add xai-oauth --type oauth (or set XAI_API_KEY). Use Hermes venv Python.
 ```
 
 ## Response Format
@@ -248,6 +277,7 @@ Role mapping on generation-run inputs:
 
 **Images (fal):** `<YYYYMMDD>_<HHMMSS>_<model>[_edit].{png,md,json}`
 **Images (gptimage2):** `<YYYYMMDD>_<HHMMSS>_gptimage2_<quality>[_edit].{png,md,json}`
+**Images (grokimage2):** `<YYYYMMDD>_<HHMMSS>_grokimage2_<quality>[_edit].{png,md,json}`
 **Videos:** `<YYYYMMDD>_<HHMMSS>_<model>[_i2v].{mp4,md,json}`
 
 Examples:
@@ -255,19 +285,24 @@ Examples:
 - `20260417_090400_nano2_edit.png` (image edit)
 - `20260718_233100_gptimage2_medium.png` (GPT Image 2 generate)
 - `20260718_233130_gptimage2_low_edit.png` (GPT Image 2 edit)
+- `20260817_120000_grokimage2_low.png` (Grok Imagine generate)
+- `20260817_120030_grokimage2_medium_edit.png` (Grok Imagine edit)
 - `20260417_090400_seedance2.mp4` (text-to-video)
 - `20260417_090400_seedance2_i2v.mp4` (image-to-video)
+- `20260817_120100_grokvideo.mp4` (Grok text-to-video)
+- `20260817_120130_grokvideo_i2v.mp4` (Grok image-to-video)
 
 ## Tips
 
-- Use `--seed` when you want reproducible results or iterate on a specific image/video (not available on gptimage2)
+- Use `--seed` when you want reproducible results or iterate on a specific image/video (not available on gptimage2 / grokimage2 / grokvideo)
+- Image mode (fal) has a 120s internal timeout; gptimage2, grokimage2, and video use 300s
+- Grok image/video result URLs expire — the script downloads immediately into the workspace
 - For image edit mode, previously generated images live at `~/.hermes/workspace/mediagen/images/raw/`
 - For image-to-video, previously generated images can be used as start/end frames
 - The script auto-creates directories if they don't exist
 - Safety/censor settings are hardcoded to most permissive where the backend allows it (not overridable)
-- Image mode (fal) has a 120s internal timeout; gptimage2 and video use 300s
 - Seedance video generation takes ~30-45s for a 5-second clip — longer for higher resolution/duration
-- For gptimage2 edits, keep source images under 25MB and use PNG/JPEG/GIF/WebP
+- For gptimage2 / grokimage2 edits, keep source images under 25MB and use PNG/JPEG/GIF/WebP
 
 ## Video Prompting Guide
 
@@ -291,8 +326,13 @@ For best results with Seedance, structure prompts like a professional shot descr
 
 - **FAL_KEY not set:** fal models (`flux2`/`nano2`/`seedance2`) fail without it. The key is stored in the Hermes env file. Ensure `FAL_KEY` is in `env_passthrough` in config.yaml — otherwise it won't reach the terminal shell. After adding to env_passthrough, a new Hermes session is required for it to take effect
 - **gptimage2 auth missing:** needs `hermes auth add openai-codex` and Hermes venv Python so `agent.auxiliary_client` can refresh/read the token
+- **grokimage2/grokvideo auth missing:** needs `hermes auth add xai-oauth --type oauth` (or `XAI_API_KEY`) and Hermes venv Python
+- **Do not change global `image_gen.provider` or `video_gen.provider` for mediagen Grok/GPT** — mediagen talks to the APIs directly
+- **Grok media URLs expire:** never return the remote URL to Telegram; the script always downloads first
+- **grokimage2 `--quality high` is an error** — API only allows `low`/`medium`
+- **grokvideo duration is 1–15s**, not Seedance's 4–12
+- **grokvideo rejects `--end-image`, `--camera-fixed`, `--no-audio`**
 - **gptimage2 account capability:** if ChatGPT/Codex account has image gen disabled, script returns a clear ERROR and you should fall back to flux2/nano2
-- **Do not change global `image_gen.provider` for mediagen gptimage2** — mediagen talks to Codex directly; native Hermes image_generate can stay on FAL/Nous
 - **fal_client.subscribe() has NO timeout param:** Do NOT pass `timeout=` to `fal_client.subscribe()` — it will raise TypeError. The script uses `signal.SIGALRM` for timeout instead
 - **fal_client.upload() crashes:** Do NOT use `fal_client.upload(file_handle)` — it crashes with `TypeError: object of type '_io.BufferedReader' has no len()`. Always use `fal_client.upload_file(path_string)` which accepts a file path directly
 - **Large input files:** fal_client.upload_file() handles this, but very large images (>10MB) may be slow; gptimage2 hard-caps inputs at 25MB
