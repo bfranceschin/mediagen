@@ -80,6 +80,7 @@ def _operation_for_mode(mode: str) -> Optional[str]:
     mapping = {
         "generate": "generate",
         "edit": "edit",
+        "upscale": "upscale",
         "image-to-video": "image-to-video",
         "text-to-video": "text-to-video",
     }
@@ -204,6 +205,23 @@ def _collect_run_inputs(
                 continue
             assets.append(_make_input_asset(rel, role="edit_source", position=i))
             gen_inputs.append({"path": rel, "role": "edit_source", "position": i})
+        return assets, gen_inputs, errors
+
+    if operation == "upscale":
+        raw_inputs = log.get("inputs") or []
+        if not isinstance(raw_inputs, list):
+            errors.append("inputs is not a list")
+            return assets, gen_inputs, errors
+        for i, raw in enumerate(raw_inputs):
+            rel = _normalize_input_rel(workspace, str(raw))
+            if not rel:
+                errors.append(f"input escapes workspace: {Path(str(raw)).name}")
+                continue
+            if not (workspace / rel).is_file():
+                errors.append(f"missing input file: {rel}")
+                continue
+            assets.append(_make_input_asset(rel, role="upscale_source", position=i))
+            gen_inputs.append({"path": rel, "role": "upscale_source", "position": i})
         return assets, gen_inputs, errors
 
     if operation == "image-to-video":

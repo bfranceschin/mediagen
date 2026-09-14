@@ -133,6 +133,35 @@ class TestBuildImageMediaPayload:
         assert len(assets) == 1
         assert assets[0]["path"] == "images/raw/gen.png"
 
+    def test_upscale_uses_upscale_source_role(self, tmp_path):
+        _setup_workspace(tmp_path)
+        src = tmp_path / "external" / "src.png"
+        src.write_bytes(_png_bytes())
+        out = tmp_path / "images" / "raw" / "out_upscale.png"
+        out.write_bytes(_png_bytes())
+        assets, generation = mediagen.build_media_sync_payload(
+            kind="image",
+            mode="upscale",
+            model="seedvr",
+            endpoint="fal-ai/seedvr/upscale/image",
+            prompt="upscale",
+            seed=42,
+            output_path=out,
+            input_md_entries=[{"path": str(src), "original": "/tmp/src.png"}],
+            end_md_entry=None,
+            params={"endpoint": "fal-ai/seedvr/upscale/image", "upscale_factor": 2},
+        )
+        assert generation["operation"] == "upscale"
+        assert generation["model"] == "seedvr"
+        assert generation["provider"] == "fal"
+        assert generation["inputs"] == [
+            {"path": "external/src.png", "role": "upscale_source", "position": 0},
+        ]
+        assert assets[0]["role"] == "upscale_source"
+        assert assets[0]["origin"] == "external_import"
+        assert assets[0]["show_in_grid"] is False
+        assert assets[-1]["path"] == "images/raw/out_upscale.png"
+
 
 class TestBuildVideoMediaPayload:
     def test_i2v_start_and_end_frame_roles(self, tmp_path):
@@ -379,3 +408,61 @@ class TestFinalizeAfterPersist:
             mediagen.run_image_fal(args)
         assert ei.value.code == 1
         assert calls == []
+
+
+class TestRunImageUpscale:
+    def test_mocked_seedvr_writes_upscale_outputs(self, tmp_path, monkeypatch, capsys):
+        _setup_workspace(tmp_path)
+        src = tmp_path / "src.png"
+        src.write_bytes(_png_bytes())
+        fal = MagicMock()
+        fal.subscribe.return_value = {
+            "image": {"url": "https://fal.example/out.png"},
+            "seed": 7,
+        }
+        monkeypatch.setattr(mediagen, "require_fal_client", lambda: fal)
+        monkeypatch.setattr(mediagen, "upload_to_fal", lambda _p: "https://fal.example/in.png")
+        monkeypatch.setattr(
+            mediagen,
+            "download_file",
+            lambda _url, dest: Path(dest).write_bytes(_png_bytes()),
+        )
+        monkeypatch.setattr(mediagen, "sync_if_enabled", lambda *a, **k: None)
+        monkeypatch.setattr(mediagen, "load_config", lambda: None)
+
+        args = SimpleNamespace(
+            prompt=None,
+            model="upscale",
+            inputs=[str(src)],
+            width=1280,
+            height=720,
+            steps=28,
+            seed=7,
+            enable_web_search=False,
+            resolution="720p",
+            upscale_factor=2,
+            quality="medium",
+        )
+        mediagen.run_image(args)
+
+        endpoint, kwargs = fal.subscribe.call_args
+        assert endpoint[0] == "fal-ai/seedvr/upscale/image"
+        payload = kwargs.get("arguments") or endpoint[1]
+        # subscribe(endpoint, arguments=api_args)
+        if payload is None:
+            payload = fal.subscribe.call_args.kwargs["arguments"]
+        assert payload["upscale_mode"] == "factor"
+        assert payload["upscale_factor"] == 2
+        assert "prompt" not in payload
+
+        line = capsys.readouterr().out.strip().splitlines()[-1]
+        assert "FILENAME=" in line
+        filename = line.split("FILENAME=")[1].split()[0]
+        assert filename.endswith("_seedvr_upscale.png")
+        assert "PROMPT=upscale" in line
+        assert "SEED=7" in line
+        assert (mediagen.RAW_DIR / filename).is_file()
+        log = json.loads((mediagen.LOGS_DIR / filename.replace(".png", ".json")).read_text())
+        assert log["mode"] == "upscale"
+        assert log["prompt"] == "upscale"
+        assert log["inputs"]

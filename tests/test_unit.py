@@ -425,6 +425,95 @@ class TestValidateArgs:
         args = self._make_image_args(inputs=["/a.png", "/b.png", "/c.png", "/d.png"])
         mediagen.validate_args(args)  # should not exit
 
+    def test_image_model_nondefault_resolution_still_fails(self):
+        args = self._make_image_args(resolution="1080p")
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+    def test_image_model_upscale_factor_fails(self):
+        args = self._make_image_args(upscale_factor=4)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
+
+
+class TestValidateUpscaleArgs:
+    def _make_args(self, **overrides):
+        defaults = {
+            "model": "seedvr",
+            "prompt": None,
+            "width": 1280,
+            "height": 720,
+            "steps": 28,
+            "enable_web_search": False,
+            "inputs": ["/a.png"],
+            "end_image": None,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "duration": 5,
+            "camera_fixed": False,
+            "no_audio": False,
+            "quality": "medium",
+            "seed": None,
+            "upscale_factor": 2,
+        }
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_seedvr_one_input_passes(self):
+        mediagen.validate_args(self._make_args())
+
+    def test_upscale_alias_one_input_passes(self):
+        mediagen.validate_args(self._make_args(model="upscale"))
+
+    def test_missing_inputs_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(inputs=None))
+
+    def test_empty_inputs_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(inputs=[]))
+
+    def test_two_inputs_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(inputs=["/a.png", "/b.png"]))
+
+    def test_factor_too_low_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(upscale_factor=0))
+
+    def test_factor_too_high_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(upscale_factor=11))
+
+    def test_factor_bounds_pass(self):
+        mediagen.validate_args(self._make_args(upscale_factor=1))
+        mediagen.validate_args(self._make_args(upscale_factor=10))
+
+    def test_target_1440p_passes(self):
+        mediagen.validate_args(self._make_args(resolution="1440p"))
+
+    def test_target_2160p_passes(self):
+        mediagen.validate_args(self._make_args(resolution="2160p"))
+
+    def test_480p_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(resolution="480p"))
+
+    def test_custom_factor_and_target_conflict(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(upscale_factor=4, resolution="2160p"))
+
+    def test_default_factor_with_target_ok(self):
+        mediagen.validate_args(self._make_args(upscale_factor=2, resolution="2160p"))
+
+    def test_custom_width_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(width=1920))
+
+    def test_camera_fixed_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(camera_fixed=True))
+
 
 class TestValidateGrokArgs:
     def _make_image_args(self, **overrides):
@@ -610,14 +699,17 @@ class TestEnsureDirs:
 
 class TestModelRouting:
     def test_image_models_set(self):
-        assert mediagen.IMAGE_MODELS == {"flux2", "nano2", "gptimage2", "grokimage2"}
+        assert {"flux2", "nano2", "gptimage2", "grokimage2", "seedvr", "upscale"} <= mediagen.IMAGE_MODELS
 
     def test_video_models_set(self):
         assert mediagen.VIDEO_MODELS == {"seedance2", "grokvideo"}
 
-    def test_model_map_has_all_models(self):
+    def test_model_map_has_canonical_models(self):
         for m in mediagen.IMAGE_MODELS | mediagen.VIDEO_MODELS:
-            assert m in mediagen.MODEL_MAP
+            assert mediagen.canonical_model(m) in mediagen.MODEL_MAP
+
+    def test_seedvr_upscale_endpoint(self):
+        assert mediagen.MODEL_MAP["seedvr"]["upscale"] == "fal-ai/seedvr/upscale/image"
 
     
     def test_gptimage2_endpoints(self):
@@ -841,3 +933,83 @@ class TestXaiProviderAndParse:
             timeout_seconds=5,
         )
         assert body["status"] == "failed"
+
+
+# ── SeedVR upscale ───────────────────────────────────────────────────────────
+
+
+class TestCanonicalUpscaleModel:
+    def test_seedvr_stays_seedvr(self):
+        assert mediagen.canonical_model("seedvr") == "seedvr"
+
+    def test_upscale_alias_maps_to_seedvr(self):
+        assert mediagen.canonical_model("upscale") == "seedvr"
+
+    def test_flux2_unchanged(self):
+        assert mediagen.canonical_model("flux2") == "flux2"
+
+
+class TestEffectivePrompt:
+    def test_upscale_without_prompt_uses_upscale(self):
+        args = MagicMock(model="seedvr", prompt=None)
+        assert mediagen.effective_prompt(args) == "upscale"
+
+    def test_upscale_alias_without_prompt(self):
+        args = MagicMock(model="upscale", prompt="")
+        assert mediagen.effective_prompt(args) == "upscale"
+
+    def test_upscale_keeps_explicit_prompt(self):
+        args = MagicMock(model="seedvr", prompt="sharpen faces")
+        assert mediagen.effective_prompt(args) == "sharpen faces"
+
+    def test_flux2_keeps_prompt(self):
+        args = MagicMock(model="flux2", prompt="a cat")
+        assert mediagen.effective_prompt(args) == "a cat"
+
+
+class TestBuildSeedvrArgs:
+    def _make_args(self, **overrides):
+        defaults = {
+            "image_urls": ["https://fal.example/in.png"],
+            "seed": None,
+            "resolution": "720p",
+            "upscale_factor": 2,
+        }
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_factor_default_two_png_no_prompt_no_seed(self):
+        result = mediagen.build_seedvr_args(self._make_args())
+        assert result == {
+            "image_url": "https://fal.example/in.png",
+            "output_format": "png",
+            "upscale_mode": "factor",
+            "upscale_factor": 2,
+        }
+        assert "prompt" not in result
+        assert "seed" not in result
+
+    def test_includes_seed_when_provided(self):
+        result = mediagen.build_seedvr_args(self._make_args(seed=42))
+        assert result["seed"] == 42
+
+    def test_custom_factor(self):
+        result = mediagen.build_seedvr_args(self._make_args(upscale_factor=4))
+        assert result["upscale_mode"] == "factor"
+        assert result["upscale_factor"] == 4
+        assert "target_resolution" not in result
+
+    def test_target_resolution_2160p(self):
+        result = mediagen.build_seedvr_args(self._make_args(resolution="2160p"))
+        assert result["upscale_mode"] == "target"
+        assert result["target_resolution"] == "2160p"
+        assert "upscale_factor" not in result
+
+    def test_target_resolution_1080p(self):
+        result = mediagen.build_seedvr_args(self._make_args(resolution="1080p"))
+        assert result["upscale_mode"] == "target"
+        assert result["target_resolution"] == "1080p"
+
+    def test_720p_stays_factor_mode(self):
+        result = mediagen.build_seedvr_args(self._make_args(resolution="720p"))
+        assert result["upscale_mode"] == "factor"

@@ -6,6 +6,7 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 
 - **Image generation** via FLUX.2 (dev) and Nano Banana 2
 - **Image editing** with reference images (1-4 inputs)
+- **Image upscale** via SeedVR2 (`seedvr` / alias `upscale`) — opt-in, never automatic
 - **Video generation** via Seedance 1.5 Pro (text-to-video and image-to-video)
 - **Start & end frame conditioning** for precise video transitions
 - **Native audio generation** synchronized with video
@@ -23,6 +24,7 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 | Nano Banana 2 | `nano2` | `fal-ai/nano-banana-2` | Text rendering, complex composition, web grounding | ~$0.05/image |
 | GPT Image 2 | `gptimage2` | ChatGPT/Codex OAuth (`openai-codex/gpt-image-2`) | GPT Image 2 without OpenAI API key; quality tiers low/medium/high | ChatGPT quota |
 | Grok Imagine Image 2.0 | `grokimage2` | `https://api.x.ai/v1/images/generations` | Grok image generate/edit; quality low/medium; 1k/2k | SuperGrok / `XAI_API_KEY` |
+| SeedVR2 | `seedvr` (alias `upscale`) | `fal-ai/seedvr/upscale/image` | Opt-in image upscale 1–10× or 1080p–2160p | $0.001/MP out |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | Animating images with start/end frame control | ~$0.26/5s@720p |
 | Grok Imagine Video 1.5 | `grokvideo` | `https://api.x.ai/v1/videos/generations` | Text-to-video and image-to-video (1 start frame); 1–15s | SuperGrok / `XAI_API_KEY` |
@@ -78,6 +80,17 @@ Requires Hermes venv Python. Prefers `hermes auth add xai-oauth`; falls back to 
   --prompt "a red ball bouncing once on a white floor" \
   --duration 5 --aspect-ratio 16:9 --resolution 720p
 ```
+
+### Image Upscale (SeedVR2)
+
+```bash
+python3 scripts/mediagen.py \
+  --model seedvr \
+  --inputs /path/to/image.png \
+  --upscale-factor 2
+```
+
+`--model upscale` is an alias. `--prompt` is optional.
 
 ### Video — Text to Video
 

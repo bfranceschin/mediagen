@@ -90,7 +90,9 @@ HERMES_AGENT_DIR = Path(
 FAL_IMAGE_MODELS = {"flux2", "nano2"}
 CODEX_IMAGE_MODELS = {"gptimage2"}
 XAI_IMAGE_MODELS = {"grokimage2"}
-IMAGE_MODELS = FAL_IMAGE_MODELS | CODEX_IMAGE_MODELS | XAI_IMAGE_MODELS
+UPSCALE_MODEL_ALIASES = {"upscale": "seedvr"}
+UPSCALE_MODELS = {"seedvr", "upscale"}
+IMAGE_MODELS = FAL_IMAGE_MODELS | CODEX_IMAGE_MODELS | XAI_IMAGE_MODELS | UPSCALE_MODELS
 XAI_VIDEO_MODELS = {"grokvideo"}
 VIDEO_MODELS = {"seedance2"} | XAI_VIDEO_MODELS
 
@@ -98,6 +100,12 @@ VALID_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto", "3:2
 SEEDANCE_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto"}
 GROK_VIDEO_ASPECT_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
 VALID_RESOLUTIONS = {"480p", "720p", "1080p"}
+SEEDVR_TARGET_RESOLUTIONS = {"1080p", "1440p", "2160p"}
+CLI_RESOLUTIONS = VALID_RESOLUTIONS | SEEDVR_TARGET_RESOLUTIONS
+SEEDVR_ENDPOINT = "fal-ai/seedvr/upscale/image"
+SEEDVR_DEFAULT_FACTOR = 2
+SEEDVR_FACTOR_MIN = 1
+SEEDVR_FACTOR_MAX = 10
 VALID_GPT_QUALITIES = {"low", "medium", "high"}
 VALID_GROK_QUALITIES = {"low", "medium"}
 GROK_MAX_REFERENCE_IMAGES = 3
@@ -127,10 +135,14 @@ MODEL_MAP = {
         "text-to-video": "https://api.x.ai/v1/videos/generations",
         "image-to-video": "https://api.x.ai/v1/videos/generations",
     },
+    "seedvr": {
+        "upscale": "fal-ai/seedvr/upscale/image",
+    },
 }
 
 IMAGE_TIMEOUT_SECONDS = 120
 CODEX_IMAGE_TIMEOUT_SECONDS = 300
+UPSCALE_TIMEOUT_SECONDS = 300
 VIDEO_TIMEOUT_SECONDS = 300
 
 # GPT Image 2 via Codex Responses API (mirrors Hermes openai-codex image plugin)
@@ -237,13 +249,19 @@ def build_media_sync_payload(
 
     Role mapping:
       - image edit inputs → edit_source by position
+      - image upscale input → upscale_source
       - i2v first input → start_frame; end_image → end_frame
     Never includes legacy Markdown paths.
     """
     assets: List[dict] = []
     gen_inputs: List[dict] = []
 
+    image_input_role = None
     if kind == "image" and mode == "edit":
+        image_input_role = "edit_source"
+    elif kind == "image" and mode == "upscale":
+        image_input_role = "upscale_source"
+    if image_input_role:
         for i, entry in enumerate(input_md_entries or []):
             rel = workspace_relpath(entry["path"])
             assets.append(
@@ -252,11 +270,11 @@ def build_media_sync_payload(
                     "kind": "image",
                     "origin": "external_import",
                     "show_in_grid": False,
-                    "role": "edit_source",
+                    "role": image_input_role,
                     "position": i,
                 }
             )
-            gen_inputs.append({"path": rel, "role": "edit_source", "position": i})
+            gen_inputs.append({"path": rel, "role": image_input_role, "position": i})
     elif kind == "video" and mode == "image-to-video":
         if input_md_entries:
             start_rel = workspace_relpath(input_md_entries[0]["path"])
@@ -465,6 +483,52 @@ def build_nano2_args(args, mode: str) -> dict:
     return api_args
 
 
+def canonical_model(model: str) -> str:
+    """Map CLI aliases to the canonical model key (e.g. upscale → seedvr)."""
+    return UPSCALE_MODEL_ALIASES.get(model, model)
+
+
+def is_upscale_model(model: str) -> bool:
+    return model in UPSCALE_MODELS
+
+
+def effective_prompt(args) -> str:
+    """Stdout/log prompt. Upscale may omit --prompt; contract still needs PROMPT=."""
+    raw = getattr(args, "prompt", None)
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    if is_upscale_model(getattr(args, "model", "")):
+        return "upscale"
+    return raw if isinstance(raw, str) else ""
+
+
+def _upscale_factor_value(args) -> float:
+    factor = getattr(args, "upscale_factor", SEEDVR_DEFAULT_FACTOR)
+    if isinstance(factor, bool) or not isinstance(factor, (int, float)):
+        return SEEDVR_DEFAULT_FACTOR
+    return float(factor) if isinstance(factor, float) else int(factor)
+
+
+def build_seedvr_args(args) -> dict:
+    """Payload for fal-ai/seedvr/upscale/image. No prompt field."""
+    image_urls = getattr(args, "image_urls", None) or []
+    payload: dict = {
+        "image_url": image_urls[0],
+        "output_format": "png",
+    }
+    resolution = getattr(args, "resolution", "720p")
+    if isinstance(resolution, str) and resolution in SEEDVR_TARGET_RESOLUTIONS:
+        payload["upscale_mode"] = "target"
+        payload["target_resolution"] = resolution
+    else:
+        payload["upscale_mode"] = "factor"
+        payload["upscale_factor"] = _upscale_factor_value(args)
+    seed = getattr(args, "seed", None)
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        payload["seed"] = seed
+    return payload
+
+
 def build_seedance2_args(args, mode: str) -> dict:
     """Build fal.ai API arguments for Seedance 1.5 Pro models."""
     api_args = {
@@ -525,15 +589,84 @@ def build_grokvideo_args(args, mode: str) -> dict:
     return api_args
 
 
+def _validate_upscale_args(args):
+    """Upscale is opt-in SR: exactly one input, factor XOR target resolution."""
+    inputs = getattr(args, "inputs", None)
+    if not inputs or len(inputs) != 1:
+        print("ERROR=Upscale requires exactly one input image (--inputs <path>).")
+        sys.exit(1)
+    if getattr(args, "width", 1280) != 1280 or getattr(args, "height", 720) != 720:
+        print("ERROR=--width/--height are not supported for upscale. Use --upscale-factor or --resolution.")
+        sys.exit(1)
+    if getattr(args, "steps", 28) != 28:
+        print("ERROR=--steps is not supported for upscale.")
+        sys.exit(1)
+    if getattr(args, "enable_web_search", False):
+        print("ERROR=--enable-web-search is not supported for upscale.")
+        sys.exit(1)
+    quality = getattr(args, "quality", "medium")
+    if isinstance(quality, str) and quality != "medium":
+        print("ERROR=--quality is not supported for upscale.")
+        sys.exit(1)
+    if getattr(args, "camera_fixed", False):
+        print("ERROR=--camera-fixed is not supported for upscale.")
+        sys.exit(1)
+    if getattr(args, "no_audio", False):
+        print("ERROR=--no-audio is not supported for upscale.")
+        sys.exit(1)
+    if getattr(args, "end_image", None) is not None:
+        print("ERROR=--end-image is not supported for upscale.")
+        sys.exit(1)
+    duration = getattr(args, "duration", 5)
+    if isinstance(duration, int) and duration != 5:
+        print("ERROR=--duration is not supported for upscale.")
+        sys.exit(1)
+    aspect = getattr(args, "aspect_ratio", "16:9")
+    if isinstance(aspect, str) and aspect != "16:9":
+        print("ERROR=--aspect-ratio is not supported for upscale.")
+        sys.exit(1)
+
+    resolution = getattr(args, "resolution", "720p")
+    if not isinstance(resolution, str):
+        resolution = "720p"
+    if resolution not in ({"720p"} | SEEDVR_TARGET_RESOLUTIONS):
+        print(
+            "ERROR=--resolution for upscale must be 720p (factor mode) or "
+            f"{sorted(SEEDVR_TARGET_RESOLUTIONS)} (target mode), got '{resolution}'."
+        )
+        sys.exit(1)
+
+    factor = _upscale_factor_value(args)
+    if factor < SEEDVR_FACTOR_MIN or factor > SEEDVR_FACTOR_MAX:
+        print(
+            f"ERROR=--upscale-factor must be between {SEEDVR_FACTOR_MIN} and "
+            f"{SEEDVR_FACTOR_MAX}, got {factor}."
+        )
+        sys.exit(1)
+    target_mode = resolution in SEEDVR_TARGET_RESOLUTIONS
+    custom_factor = factor != SEEDVR_DEFAULT_FACTOR
+    if target_mode and custom_factor:
+        print("ERROR=--upscale-factor and --resolution target cannot be combined. Use one.")
+        sys.exit(1)
+
+
 def validate_args(args):
     """Validate argument combinations and exit with error if invalid."""
     model_key = args.model
+    if is_upscale_model(model_key):
+        _validate_upscale_args(args)
+        return
     is_video_model = model_key in VIDEO_MODELS
     is_image_model = model_key in IMAGE_MODELS
     is_codex_image = model_key in CODEX_IMAGE_MODELS
     is_fal_image = model_key in FAL_IMAGE_MODELS
     is_xai_image = model_key in XAI_IMAGE_MODELS
     is_xai_video = model_key in XAI_VIDEO_MODELS
+
+    prompt = getattr(args, "prompt", None)
+    if prompt is None or (isinstance(prompt, str) and not prompt.strip()):
+        print("ERROR=--prompt is required")
+        sys.exit(1)
 
     # MagicMock test doubles auto-create missing attrs; only honor real str quality.
     quality = getattr(args, "quality", "medium")
@@ -669,6 +802,11 @@ def validate_args(args):
         if args.inputs is not None and len(args.inputs) > 4:
             print("ERROR=Image edit mode supports at most 4 input images.")
             sys.exit(1)
+
+    factor = getattr(args, "upscale_factor", SEEDVR_DEFAULT_FACTOR)
+    if isinstance(factor, (int, float)) and not isinstance(factor, bool) and factor != SEEDVR_DEFAULT_FACTOR:
+        print("ERROR=--upscale-factor is only supported for seedvr/upscale.")
+        sys.exit(1)
 
 
 # ── xAI / Grok Imagine auth + parse ──────────────────────────────────────────
@@ -1208,7 +1346,8 @@ def _write_image_artifacts(
 ) -> dict:
     """Persist image markdown + JSON log. Returns metadata for Media sync + FILENAME print."""
     md_path = IMAGES_DIR / f"{base_name}.md"
-    if mode == "edit":
+    prompt_text = effective_prompt(args)
+    if mode in {"edit", "upscale"}:
         lines = []
         for entry in input_md_entries:
             orig = Path(entry["original"])
@@ -1226,7 +1365,7 @@ def _write_image_artifacts(
 # {base_name}
 
 ## Prompt
-{args.prompt}
+{prompt_text}
 
 ## Model
 {endpoint}
@@ -1248,20 +1387,20 @@ def _write_image_artifacts(
         seed_value = None
     log_data = {
         "filename": image_filename,
-        "prompt": args.prompt,
+        "prompt": prompt_text,
         "model": endpoint,
         "mode": mode,
         "seed": seed_value,
         "width": args.width,
         "height": args.height,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode == "edit" else [],
+        "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode in {"edit", "upscale"} else [],
         **log_extra,
     }
     with open(log_path, "w") as f:
         json.dump(log_data, f, indent=2, default=str)
 
-    model_key = getattr(args, "model", None) or "unknown"
+    model_key = canonical_model(getattr(args, "model", None) or "unknown")
     params: dict[str, Any] = {
         "endpoint": endpoint,
         "width": args.width,
@@ -1280,7 +1419,7 @@ def _write_image_artifacts(
     return {
         "kind": "image",
         "filename": image_filename,
-        "prompt": args.prompt,
+        "prompt": prompt_text,
         "seed_display": seed_display,
         "seed": seed_value,
         "log_path": log_path,
@@ -1643,9 +1782,83 @@ def run_image_xai(args):
     )
 
 
+def run_image_upscale(args):
+    """Execute fal.ai SeedVR2 image upscale. Never chained after generate."""
+    fal_client = require_fal_client()
+    ensure_dirs(media_type="image")
+    mode = "upscale"
+    model_key = canonical_model(args.model)
+    endpoint = MODEL_MAP[model_key][mode]
+
+    local_copy = copy_to_external(args.inputs[0])
+    image_url = upload_to_fal(str(local_copy))
+    args.image_urls = [image_url]
+    input_md_entries = [{"path": str(local_copy), "original": args.inputs[0]}]
+    api_args = build_seedvr_args(args)
+
+    try:
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"Timeout after {UPSCALE_TIMEOUT_SECONDS}s")
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(UPSCALE_TIMEOUT_SECONDS)
+        try:
+            result = fal_client.subscribe(endpoint, arguments=api_args)
+        finally:
+            signal.alarm(0)
+    except Exception as e:
+        name = type(e).__name__
+        if "FalClientError" in name or "fal" in name.lower():
+            print(f"ERROR=fal.ai API error: {e}")
+        elif isinstance(e, TimeoutError):
+            print(f"ERROR={e}. Try again or use a different model.")
+        else:
+            print(f"ERROR=Unexpected error: {e}")
+        sys.exit(1)
+
+    image_data = result.get("image") if isinstance(result, dict) else None
+    if not isinstance(image_data, dict) or not image_data.get("url"):
+        print("ERROR=No upscaled image returned from fal.ai")
+        sys.exit(1)
+
+    image_url_out = image_data["url"]
+    returned_seed = result.get("seed") or args.seed
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    base_name = f"{timestamp}_{model_key}_upscale"
+    image_filename = f"{base_name}.png"
+    image_path = RAW_DIR / image_filename
+    download_file(image_url_out, image_path)
+
+    seed_display = returned_seed if returned_seed is not None else "random"
+    if api_args.get("upscale_mode") == "target":
+        size_str = f"target {api_args.get('target_resolution')}"
+    else:
+        size_str = f"{api_args.get('upscale_factor')}x"
+    finalize_generation_with_media_sync(
+        _write_image_artifacts(
+            image_path=image_path,
+            base_name=base_name,
+            image_filename=image_filename,
+            args=args,
+            mode=mode,
+            endpoint=endpoint,
+            seed_display=seed_display,
+            size_str=size_str,
+            input_md_entries=input_md_entries,
+            log_extra={
+                "fal_response": result,
+                "upscale_factor": api_args.get("upscale_factor"),
+                "upscale_mode": api_args.get("upscale_mode"),
+                "target_resolution": api_args.get("target_resolution"),
+            },
+        )
+    )
+
+
 def run_image(args):
-    """Route image models to fal.ai, Codex, or xAI backends."""
-    if args.model in CODEX_IMAGE_MODELS:
+    """Route image models to fal.ai, Codex, xAI, or SeedVR upscale."""
+    if is_upscale_model(args.model):
+        run_image_upscale(args)
+    elif args.model in CODEX_IMAGE_MODELS:
         run_image_codex(args)
     elif args.model in XAI_IMAGE_MODELS:
         run_image_xai(args)
@@ -1831,10 +2044,15 @@ def main():
         description="mediagen — Image and video generation via fal.ai + ChatGPT Codex OAuth"
     )
     parser.add_argument("--model", required=True, choices=all_models, help="Model to use")
-    parser.add_argument("--prompt", required=True, help="Text prompt for generation")
+    parser.add_argument(
+        "--prompt",
+        required=False,
+        default=None,
+        help="Text prompt for generation (optional for seedvr/upscale)",
+    )
 
     # Image args
-    parser.add_argument("--inputs", nargs="*", default=None, help="Input images: for image edit mode or image-to-video")
+    parser.add_argument("--inputs", nargs="*", default=None, help="Input images: for image edit, upscale, or image-to-video")
     parser.add_argument("--width", type=int, default=1280, help="Output width — image only (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Output height — image only (default: 720)")
     parser.add_argument("--steps", type=int, default=28, help="Inference steps — flux2 only (default: 28)")
@@ -1846,10 +2064,21 @@ def main():
         choices=sorted(VALID_GPT_QUALITIES),
         help="Image quality — gptimage2: low|medium|high; grokimage2: low|medium (default: medium)",
     )
+    parser.add_argument(
+        "--upscale-factor",
+        type=float,
+        default=SEEDVR_DEFAULT_FACTOR,
+        help="Upscale factor 1-10 — seedvr only (default: 2). Ignored when --resolution is 1080p/1440p/2160p",
+    )
 
     # Video args
     parser.add_argument("--end-image", default=None, help="End frame image — seedance2 image-to-video only")
-    parser.add_argument("--resolution", default="720p", choices=VALID_RESOLUTIONS, help="Video resolution (default: 720p)")
+    parser.add_argument(
+        "--resolution",
+        default="720p",
+        choices=sorted(CLI_RESOLUTIONS),
+        help="Video resolution, or SeedVR target (1080p/1440p/2160p)",
+    )
     parser.add_argument("--aspect-ratio", default="16:9", choices=sorted(VALID_ASPECT_RATIOS), help="Video aspect ratio (default: 16:9)")
     parser.add_argument("--duration", type=int, default=5, help="Video duration in seconds (seedance 4-12, grokvideo 1-15; default: 5)")
     parser.add_argument("--camera-fixed", action="store_true", help="Lock camera position — video only")

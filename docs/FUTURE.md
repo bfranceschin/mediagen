@@ -39,3 +39,14 @@ model changes:
 Both require a still-valid Imagine result URL (`vidgen.x.ai/...`), not an
 arbitrary local `videos/raw/*.mp4`. That does not fit the local-file /
 `FILENAME=` contract.
+
+## Extra fal image upscalers (not in CLI)
+
+mediagen v1 upscale is **only** `fal-ai/seedvr/upscale/image`. Do not add these
+without a new plan:
+
+- `fal-ai/flux-vision-upscaler` — ~$0.10/MP (the cost trap)
+- `fal-ai/clarity-upscaler` — Hermes native tool; ~$0.03/MP
+- `topaz/upscale/image/precision` and `.../generative` — better fidelity / reconstruct, more surface area
+- `clarityai/crystal-upscaler` — portraits
+- `fal-ai/recraft/upscale/crisp` — flat $0.004, no factor control

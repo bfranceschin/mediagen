@@ -60,4 +60,4 @@ Global `image_gen.use_gateway: true` / FAL can stay. Test Codex path only via me
 ## Relation to native Hermes `image_generate`
 - Native tool backend = whatever `image_gen.provider` / gateway says (often FAL via Nous)
 - mediagen `gptimage2` is independent and preferred for skill workflows
-- Native tool may auto-upscale on fal (costly); mediagen does not
+- Native tool may auto-upscale on fal (costly); mediagen does not. Use `--model seedvr` for opt-in upscale

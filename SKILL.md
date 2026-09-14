@@ -1,6 +1,6 @@
 ---
 name: mediagen
-description: "Generate and edit images/videos via fal.ai (FLUX.2, Nano Banana 2, Seedance), GPT Image 2 via ChatGPT/Codex OAuth, and Grok Imagine via xAI (grokimage2 / grokvideo). Script handles API calls, file I/O, logging, and .md creation. Use this skill instead of the native image_generate tool unless the user explicitly asks for it."
+description: "Generate, edit, and upscale images/videos via fal.ai (FLUX.2, Nano Banana 2, Seedance, SeedVR2), GPT Image 2 via ChatGPT/Codex OAuth, and Grok Imagine via xAI (grokimage2 / grokvideo). Script handles API calls, file I/O, logging, and .md creation. Use this skill instead of the native image_generate tool unless the user explicitly asks for it."
 repository: https://github.com/bfranceschin/mediagen
 ---
 
@@ -9,7 +9,7 @@ repository: https://github.com/bfranceschin/mediagen
 Generate and edit images and videos with full persistence, logging, and edit support.
 
 **Backends:**
-- **fal.ai** (`FAL_KEY`): `flux2`, `nano2`, `seedance2`
+- **fal.ai** (`FAL_KEY`): `flux2`, `nano2`, `seedance2`, `seedvr` (upscale; alias `upscale`)
 - **ChatGPT/Codex OAuth** (no OpenAI API key): `gptimage2`
 - **xAI Grok Imagine** (OAuth first, then `XAI_API_KEY`): `grokimage2`, `grokvideo`
 
@@ -18,7 +18,8 @@ Default stack stays on fal.ai. Use `gptimage2` / `grokimage2` / `grokvideo` only
 ### Support files
 - `references/gptimage2-codex.md` — Codex OAuth API surface, sizes/quality, smoke-test without touching global image_gen, failure table
 - `references/grok-imagine-xai.md` — xAI OAuth/API key, Imagine params, smoke-test without touching global providers, failure table
-- `docs/FUTURE.md` — Grok features deliberately not in this CLI (reference-to-video, video edit/extend)
+- `references/seedvr-upscale.md` — SeedVR2 upscale schema, cost, CLI, failure table
+- `docs/FUTURE.md` — Grok features and extra fal upscalers not in this CLI
 
 ## When to Use
 
@@ -55,6 +56,19 @@ $PYTHON $SCRIPT \
   [--quality low|medium|high]
 ```
 
+### Image Upscale mode (exactly one input; never auto after generate)
+
+```bash
+$PYTHON $SCRIPT \
+  --model seedvr \
+  --inputs /path/to/image.png \
+  [--upscale-factor 2] \
+  [--resolution 1080p|1440p|2160p] \
+  [--seed 42]
+```
+
+`--model upscale` is an alias of `seedvr`. `--prompt` is optional (`PROMPT=upscale` if omitted). Do **not** chain this after every generate.
+
 ### Video Text-to-Video mode
 
 ```bash
@@ -85,10 +99,10 @@ $PYTHON $SCRIPT \
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedance2`, or `grokvideo` |
-| `--prompt` | Yes | — | Text prompt or edit instruction |
-| `--inputs` | No | — | Input images: 1-4 for fal image edit, up to 16 for gptimage2 edit, up to 3 for grokimage2 edit, exactly 1 for image-to-video |
-| `--seed` | No | random | Reproducibility seed (fal/seedance only; ignored by gptimage2 and Grok) |
+| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedvr`/`upscale`, `seedance2`, or `grokvideo` |
+| `--prompt` | Yes except upscale | — | Text prompt or edit instruction. Optional for `seedvr`/`upscale` |
+| `--inputs` | No | — | Input images: 1-4 for fal image edit, up to 16 for gptimage2 edit, up to 3 for grokimage2 edit, **exactly 1 for upscale**, exactly 1 for image-to-video |
+| `--seed` | No | random | Reproducibility seed (fal/seedance/seedvr; ignored by gptimage2 and Grok) |
 
 ### Image-only
 
@@ -99,13 +113,14 @@ $PYTHON $SCRIPT \
 | `--steps` | 28 | Inference steps (**flux2 only**) |
 | `--enable-web-search` | false | Web search grounding (**nano2 only**) |
 | `--quality` | `medium` | gptimage2: `low`/`medium`/`high`; grokimage2: `low`/`medium` (**high rejected**) |
+| `--upscale-factor` | `2` | SeedVR factor 1–10. Mutually exclusive with `--resolution` 1080p/1440p/2160p |
 
 ### Video-only
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--end-image` | — | End frame image (**seedance2** i2v only; rejected by grokvideo) |
-| `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
+| `--resolution` | `720p` | Video: `480p`, `720p`, or `1080p`. SeedVR target: `1080p`, `1440p`, or `2160p` (720p on seedvr = factor mode) |
 | `--aspect-ratio` | `16:9` | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3`, not `21:9`/`auto` |
 | `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
 | `--camera-fixed` | false | Lock camera (**seedance2** only; rejected by grokvideo) |
@@ -152,6 +167,17 @@ $PYTHON $SCRIPT \
 - **Edit:** `--inputs` as data URLs, up to 3
 - **Seed:** not supported (`SEED=n/a`)
 - **Runtime:** Hermes venv Python
+- **Not an upscaler:** generate/edit only; 1k/2k is not super-resolution of an existing file. Use `seedvr` on the PNG.
+
+### SeedVR2 Upscale — `seedvr` (alias `upscale`)
+- **Backend:** fal.ai
+- **Endpoint:** `fal-ai/seedvr/upscale/image`
+- **Input:** exactly one local image (`--inputs`)
+- **Modes:** `--upscale-factor` 1–10 (default 2) **or** `--resolution 1080p|1440p|2160p` (target). Do not combine a non-default factor with a target resolution
+- **Cost:** $0.001/MP of **output** (~$0.004 for 2× of 1280×720)
+- **Output:** PNG; filename `*_seedvr_upscale.png`; `PROMPT=upscale` if `--prompt` omitted
+- **Never auto-run** after generate/edit
+- **Not GPT/Grok:** those APIs have no upscale endpoint; edit-at-larger-size is a redraw
 
 ### Grok Imagine Video — `grokvideo`
 - **Backend:** xAI (`xai-oauth` first, then `XAI_API_KEY`). **Not fal.ai**
@@ -174,6 +200,7 @@ $PYTHON $SCRIPT \
 
 The script automatically determines image vs video mode from the `--model` argument:
 - `flux2`, `nano2`, `gptimage2`, or `grokimage2` → **image** mode
+- `seedvr` or `upscale` → **upscale** mode (still an image output)
 - `seedance2` or `grokvideo` → **video** mode
 
 No `--type` argument needed.
@@ -186,6 +213,7 @@ No `--type` argument needed.
 | Text in image / hard composition / spatial edits | `nano2` |
 | GPT Image 2 via ChatGPT auth (no fal charge) | `gptimage2` |
 | Grok Imagine image via xAI | `grokimage2` |
+| Upscale an existing image (opt-in) | `seedvr` (alias `upscale`) |
 | Video (default fal) | `seedance2` |
 | Grok Imagine video via xAI | `grokvideo` |
 
@@ -198,6 +226,7 @@ Keep fal as default while credits remain; pick `gptimage2` / `grokimage2` / `gro
 FILENAME=20260417_090400_flux2.png PROMPT=a cute puppy SEED=12345
 FILENAME=20260718_233100_gptimage2_low.png PROMPT=a green frog SEED=n/a
 FILENAME=20260817_120000_grokimage2_low.png PROMPT=a blue square SEED=n/a
+FILENAME=20260914_142000_seedvr_upscale.png PROMPT=upscale SEED=7
 FILENAME=20260417_090400_seedance2.mp4 PROMPT=a bouncing ball SEED=12345
 FILENAME=20260417_090400_seedance2_i2v.mp4 PROMPT=the ball bounces SEED=12345
 FILENAME=20260817_120100_grokvideo.mp4 PROMPT=a bouncing ball SEED=n/a
@@ -218,6 +247,16 @@ ERROR=No xAI credentials. Run: hermes auth add xai-oauth --type oauth (or set XA
 File: <filename>.png
 Prompt: <prompt used>
 Model: <model>
+Seed: <seed>
+[embed image using MEDIA:~/.hermes/workspace/mediagen/images/raw/<filename>]
+```
+
+### Upscale
+```
+✅ Image upscaled
+File: <filename>.png
+Model: seedvr
+Factor: <Nx>  (or Target: 2160p)
 Seed: <seed>
 [embed image using MEDIA:~/.hermes/workspace/mediagen/images/raw/<filename>]
 ```
@@ -271,11 +310,13 @@ MEDIA_UPLOAD_TIMEOUT_SECONDS=180
 Role mapping on generation-run inputs:
 
 - image edit: each `--inputs` path → `edit_source` by position
+- image upscale: `--inputs` → `upscale_source`
 - image-to-video: first `--inputs` → `start_frame`; `--end-image` → `end_frame`
 
 ### Filename Convention
 
 **Images (fal):** `<YYYYMMDD>_<HHMMSS>_<model>[_edit].{png,md,json}`
+**Images (upscale):** `<YYYYMMDD>_<HHMMSS>_seedvr_upscale.{png,md,json}`
 **Images (gptimage2):** `<YYYYMMDD>_<HHMMSS>_gptimage2_<quality>[_edit].{png,md,json}`
 **Images (grokimage2):** `<YYYYMMDD>_<HHMMSS>_grokimage2_<quality>[_edit].{png,md,json}`
 **Videos:** `<YYYYMMDD>_<HHMMSS>_<model>[_i2v].{mp4,md,json}`
@@ -287,6 +328,7 @@ Examples:
 - `20260718_233130_gptimage2_low_edit.png` (GPT Image 2 edit)
 - `20260817_120000_grokimage2_low.png` (Grok Imagine generate)
 - `20260817_120030_grokimage2_medium_edit.png` (Grok Imagine edit)
+- `20260914_142000_seedvr_upscale.png` (SeedVR upscale)
 - `20260417_090400_seedance2.mp4` (text-to-video)
 - `20260417_090400_seedance2_i2v.mp4` (image-to-video)
 - `20260817_120100_grokvideo.mp4` (Grok text-to-video)
@@ -295,7 +337,7 @@ Examples:
 ## Tips
 
 - Use `--seed` when you want reproducible results or iterate on a specific image/video (not available on gptimage2 / grokimage2 / grokvideo)
-- Image mode (fal) has a 120s internal timeout; gptimage2, grokimage2, and video use 300s
+- Image mode (fal generate/edit) has a 120s internal timeout; gptimage2, grokimage2, seedvr, and video use 300s
 - Grok image/video result URLs expire — the script downloads immediately into the workspace
 - For image edit mode, previously generated images live at `~/.hermes/workspace/mediagen/images/raw/`
 - For image-to-video, previously generated images can be used as start/end frames
@@ -324,7 +366,7 @@ For best results with Seedance, structure prompts like a professional shot descr
 
 ## Pitfalls
 
-- **FAL_KEY not set:** fal models (`flux2`/`nano2`/`seedance2`) fail without it. The key is stored in the Hermes env file. Ensure `FAL_KEY` is in `env_passthrough` in config.yaml — otherwise it won't reach the terminal shell. After adding to env_passthrough, a new Hermes session is required for it to take effect
+- **FAL_KEY not set:** fal models (`flux2`/`nano2`/`seedance2`/`seedvr`) fail without it. The key is stored in the Hermes env file. Ensure `FAL_KEY` is in `env_passthrough` in config.yaml — otherwise it won't reach the terminal shell. After adding to env_passthrough, a new Hermes session is required for it to take effect
 - **gptimage2 auth missing:** needs `hermes auth add openai-codex` and Hermes venv Python so `agent.auxiliary_client` can refresh/read the token
 - **grokimage2/grokvideo auth missing:** needs `hermes auth add xai-oauth --type oauth` (or `XAI_API_KEY`) and Hermes venv Python
 - **Do not change global `image_gen.provider` or `video_gen.provider` for mediagen Grok/GPT** — mediagen talks to the APIs directly
@@ -343,8 +385,10 @@ For best results with Seedance, structure prompts like a professional shot descr
 - **Nano2 doesn't return seed:** The nano2 API response has `"seed": null` even when a seed is provided. The script handles this by displaying the user-provided seed or "random". Do not rely on `result["seed"]` being non-null for nano2
 - **"Exhausted balance" can be transient:** fal.ai sometimes returns this error temporarily even with valid balance. If it happens, retry once before assuming the balance is actually empty
 - **FLUX.2 image_size:** Accepts both dict `{"width": N, "height": M}` and enum strings like `"landscape_4_3"`. The script uses dict format. FLUX.2 may adjust to the nearest supported resolution (e.g. 1280×720 → 1280×736)
-- **Native image_generate tool upscaler cost:** The built-in `image_generate` tool auto-upscales at $0.10/MP via fal-ai/flux-vision-upscaler — this can cost 10-30x more than the generation itself. mediagen does NOT auto-upscale
-- **Pricing reference:** FLUX.2 dev $0.012/MP (~$0.011 for 1280×720), Nano Banana 2 ~$0.05/image, Seedance 1.5 Pro ~$0.26 per 720p 5s video with audio (cheaper without audio: $1.20/1M tokens vs $2.40/1M with audio), Upscaler $0.10/MP; gptimage2 uses ChatGPT subscription quotas (not fal credits)
+- **Native image_generate tool upscaler cost:** The built-in `image_generate` tool may auto-upscale (Clarity today, historically Flux Vision at $0.10/MP). That can cost many times the generation. **mediagen never auto-upscales.** Opt in with `--model seedvr` (~$0.001/MP)
+- **Pricing reference:** FLUX.2 dev $0.012/MP (~$0.011 for 1280×720), Nano Banana 2 ~$0.05/image, Seedance 1.5 Pro ~$0.26 per 720p 5s video with audio, SeedVR2 upscale $0.001/MP output; gptimage2 uses ChatGPT subscription quotas (not fal credits)
+- **gptimage2 / grokimage2 are not upscalers:** no SR endpoint. Edit at a larger size redraws the scene
+- **SeedVR response shape:** `result["image"]["url"]` (singular `image`, not `images[]`)
 - **Seedance API param names:** Use `enable_audio` (not `generate_audio`), `static_video` (not `camera_fixed`). The script maps CLI flags to correct API names
 - **Seedance video response:** Both text-to-video and image-to-video return `result["video"]["url"]` (same schema)
 - **Seedance duration:** Must be 4-12 seconds. The script validates this
