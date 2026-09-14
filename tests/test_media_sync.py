@@ -231,6 +231,43 @@ class TestRetryPendingOnly:
         assert seen["generation"]["prompt"] == "p"
         assert seen["generation"]["outputs"][0]["path"] == "images/raw/nogen.png"
 
+    def test_rebuild_generation_drops_non_integer_seed(self, tmp_path):
+        ws = _setup_ws(tmp_path / "ws")
+        receipt = _pending_receipt(
+            ws,
+            log_name="na_seed.json",
+            assets=[
+                {
+                    "path": "videos/raw/na_seed.mp4",
+                    "kind": "video",
+                }
+            ],
+        )
+        log = json.loads((ws / "logs" / "na_seed.json").read_text(encoding="utf-8"))
+        log.update(
+            {
+                "filename": "na_seed.mp4",
+                "model": "https://api.x.ai/v1/videos/generations",
+                "mode": "image-to-video",
+                "seed": "n/a",
+            }
+        )
+        (ws / "logs" / "na_seed.json").write_text(json.dumps(log), encoding="utf-8")
+        generation = media_sync.rebuild_generation(ws, receipt)
+        assert generation["seed"] is None
+        assert generation["operation"] == "image-to-video"
+        assert generation["model"] == "grokvideo"
+
+    def test_rebuild_generation_keeps_integer_seed(self, tmp_path):
+        ws = _setup_ws(tmp_path / "ws")
+        receipt = _pending_receipt(
+            ws,
+            log_name="int_seed.json",
+            assets=[{"path": "images/raw/int_seed.png", "kind": "image"}],
+        )
+        generation = media_sync.rebuild_generation(ws, receipt)
+        assert generation["seed"] == 1
+
 
 class TestPruneRules:
     def test_prune_removes_old_completed_binary_apply(self, tmp_path):

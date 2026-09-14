@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from media_client import (
     asset_idempotency_key,
+    coerce_media_seed,
     load_config,
     post_generation_run,
     run_idempotency_key,
@@ -386,7 +387,7 @@ def build_backfill_plan(workspace: Path | str) -> BackfillPlan:
                 "provider": provider,
                 "model": model_key,
                 "prompt": log.get("prompt"),
-                "seed": log.get("seed"),
+                "seed": coerce_media_seed(log.get("seed")),
                 "params": params,
                 "status": "succeeded",
                 "tool": "mediagen",
@@ -601,7 +602,7 @@ def apply_backfill_plan(
             "provider": run["provider"],
             "model": run["model"],
             "prompt": run.get("prompt"),
-            "seed": run.get("seed"),
+            "seed": coerce_media_seed(run.get("seed")),
             "params": run.get("params") or {},
             "status": run.get("status") or "succeeded",
             "inputs": run.get("inputs") or [],

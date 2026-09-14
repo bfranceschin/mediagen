@@ -374,6 +374,7 @@ For best results with Seedance, structure prompts like a professional shot descr
 - **grokimage2 `--quality high` is an error** — API only allows `low`/`medium`
 - **grokvideo duration is 1–15s**, not Seedance's 4–12
 - **grokvideo rejects `--end-image`, `--camera-fixed`, `--no-audio`**
+- **Media `seed` is int|null:** Grok logs used to store `"n/a"`. Sync/retry coerce placeholders (`n/a`, `random`, `ignored:…`) to null. Never POST a string seed.
 - **gptimage2 account capability:** if ChatGPT/Codex account has image gen disabled, script returns a clear ERROR and you should fall back to flux2/nano2
 - **fal_client.subscribe() has NO timeout param:** Do NOT pass `timeout=` to `fal_client.subscribe()` — it will raise TypeError. The script uses `signal.SIGALRM` for timeout instead
 - **fal_client.upload() crashes:** Do NOT use `fal_client.upload(file_handle)` — it crashes with `TypeError: object of type '_io.BufferedReader' has no len()`. Always use `fal_client.upload_file(path_string)` which accepts a file path directly

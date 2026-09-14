@@ -27,6 +27,32 @@ DEFAULT_USER_AGENT = "hermes-mediagen/1.0"
 SCHEMA_VERSION = 1
 
 
+def coerce_media_seed(value: Any) -> Optional[int]:
+    """Media API seed is int|null. Drop placeholders like n/a from Grok logs."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        as_int = int(value)
+        if abs(as_int) <= 9_007_199_254_740_991:
+            return as_int
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        lower = text.lower()
+        if lower in {"n/a", "na", "random", "none", "null"} or lower.startswith("ignored:"):
+            return None
+        if text.lstrip("+-").isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
+    return None
+
+
 @dataclass(frozen=True)
 class MediaConfig:
     enabled: bool
@@ -456,7 +482,7 @@ def post_generation_run(
         "provider": generation["provider"],
         "model": generation["model"],
         "prompt": generation.get("prompt"),
-        "seed": generation.get("seed"),
+        "seed": coerce_media_seed(generation.get("seed")),
         "params": generation.get("params") if generation.get("params") is not None else {},
         "status": generation.get("status") or "succeeded",
         "inputs": inputs,

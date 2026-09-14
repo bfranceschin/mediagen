@@ -188,6 +188,33 @@ def test_map_xai_endpoint_to_grok_provider_and_model(tmp_workspace):
     assert run["params"]["endpoint"] == "https://api.x.ai/v1/images/generations"
 
 
+def test_grokvideo_na_seed_becomes_null(tmp_workspace):
+    ws = tmp_workspace
+    vid_name = "20260901_222932_grokvideo_i2v.mp4"
+    (ws / "videos" / "raw").mkdir(parents=True, exist_ok=True)
+    _write_bytes(ws / "videos" / "raw" / vid_name, b"fake-mp4")
+    (ws / "logs" / "log-grokvideo-i2v.json").write_text(
+        json.dumps(
+            {
+                "filename": vid_name,
+                "prompt": "lego dance",
+                "model": "https://api.x.ai/v1/videos/generations",
+                "mode": "image-to-video",
+                "seed": "n/a",
+                "timestamp": "2026-09-01T22:29:32+00:00",
+                "inputs": [],
+                "provider": "xai-oauth",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = media_backfill.build_backfill_plan(ws)
+    run = plan.runs[0]
+    assert run["model"] == "grokvideo"
+    assert run["seed"] is None
+
+
 # ── 4. Edit inputs → edit_source by position ─────────────────────────────────
 
 

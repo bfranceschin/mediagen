@@ -68,9 +68,21 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from media_client import load_config as load_config
     from media_client import sync_if_enabled as sync_if_enabled
+    from media_client import coerce_media_seed as coerce_media_seed
 except ImportError:  # pragma: no cover — scripts/ always on path in normal installs
     load_config = None  # type: ignore[assignment]
     sync_if_enabled = None  # type: ignore[assignment]
+    coerce_media_seed = None  # type: ignore[assignment]
+
+
+def _seed_for_media(value: Any) -> Optional[int]:
+    if coerce_media_seed is not None:
+        return coerce_media_seed(value)
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -1381,10 +1393,7 @@ def _write_image_artifacts(
         f.write(md_content)
 
     log_path = LOGS_DIR / f"{base_name}.json"
-    seed_value = None if seed_display == "n/a" else (None if seed_display == "random" else seed_display)
-    # ignored:N from gptimage2 still not a real seed
-    if isinstance(seed_display, str) and seed_display.startswith("ignored:"):
-        seed_value = None
+    seed_value = _seed_for_media(seed_display)
     log_data = {
         "filename": image_filename,
         "prompt": prompt_text,
@@ -1506,7 +1515,7 @@ Camera fixed: {camera_str}
         "prompt": args.prompt,
         "model": endpoint,
         "mode": mode,
-        "seed": returned_seed,
+        "seed": _seed_for_media(returned_seed),
         "resolution": args.resolution,
         "duration": args.duration,
         "aspect_ratio": args.aspect_ratio,
@@ -1542,7 +1551,7 @@ Camera fixed: {camera_str}
         "filename": video_filename,
         "prompt": args.prompt,
         "seed_display": seed_display,
-        "seed": returned_seed,
+        "seed": _seed_for_media(returned_seed),
         "log_path": log_path,
         "output_path": video_path,
         "mode": mode,

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from media_client import (
+    coerce_media_seed,
     default_receipts_dir,
     load_config,
     load_receipt,
@@ -122,7 +123,9 @@ def _model_key_from_endpoint(endpoint: str) -> str:
 def rebuild_generation(workspace: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     """Rebuild generation payload from receipt assets + generation log JSON."""
     if isinstance(receipt.get("generation"), dict) and receipt["generation"]:
-        return dict(receipt["generation"])
+        gen = dict(receipt["generation"])
+        gen["seed"] = coerce_media_seed(gen.get("seed"))
+        return gen
 
     log_rel = receipt.get("log_path") or ""
     log_path = Path(workspace) / log_rel
@@ -185,7 +188,7 @@ def rebuild_generation(workspace: Path, receipt: dict[str, Any]) -> dict[str, An
         "provider": _provider_for_endpoint(endpoint),
         "model": _model_key_from_endpoint(endpoint),
         "prompt": log.get("prompt"),
-        "seed": log.get("seed"),
+        "seed": coerce_media_seed(log.get("seed")),
         "params": params,
         "status": "succeeded",
         "inputs": inputs,
