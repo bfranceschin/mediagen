@@ -88,7 +88,7 @@ $PYTHON $SCRIPT \
   --prompt "motion and sound description" \
   --inputs /path/to/start_frame.png \
   [--end-image /path/to/end_frame.png] \
-  [--resolution 720p] [--aspect-ratio 16:9] \
+  [--resolution 720p] [--aspect-ratio RATIO] \
   [--duration 5] [--seed 42] \
   [--camera-fixed] [--no-audio]
 ```
@@ -121,7 +121,7 @@ $PYTHON $SCRIPT \
 |----------|---------|-------------|
 | `--end-image` | — | End frame image (**seedance2** i2v only; rejected by grokvideo) |
 | `--resolution` | `720p` | Video: `480p`, `720p`, or `1080p`. SeedVR target: `1080p`, `1440p`, or `2160p` (720p on seedvr = factor mode) |
-| `--aspect-ratio` | `16:9` | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3`, not `21:9`/`auto` |
+| `--aspect-ratio` | t2v 16:9; i2v inherit | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3`, not `21:9`/`auto`. Omit on **i2v** to match the start frame (4:5 → 3:4). |
 | `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
 | `--camera-fixed` | false | Lock camera (**seedance2** only; rejected by grokvideo) |
 | `--no-audio` | false | Disable audio (**seedance2** only; rejected by grokvideo) |
@@ -380,6 +380,7 @@ For best results with Seedance, structure prompts like a professional shot descr
 - **fal_client.upload() crashes:** Do NOT use `fal_client.upload(file_handle)` — it crashes with `TypeError: object of type '_io.BufferedReader' has no len()`. Always use `fal_client.upload_file(path_string)` which accepts a file path directly
 - **Large input files:** fal_client.upload_file() handles this, but very large images (>10MB) may be slow; gptimage2 hard-caps inputs at 25MB
 - **Edit keeps source aspect unless asked otherwise:** omit `--width`/`--height` on image edit. The script reads the first `--inputs` file. If the user asks for 16:9 / landscape / square / 9:16 / etc., pass **both** flags. Do not omit flags and hope the prompt changes the frame. Grok snaps to a closed list (4:5 → 3:4); GPT Image 2 only has landscape/square/portrait; Flux is closest to the source pixels.
+- **i2v keeps start-frame aspect unless asked otherwise:** omit `--aspect-ratio` on image-to-video. t2v still defaults to 16:9. Explicit `--aspect-ratio 16:9` on a portrait frame is a real request. 4:5 snaps to 3:4.
 - **Nano2 aspect ratio:** The script converts --width/--height to aspect ratio automatically. Non-standard ratios may be rounded
 - **gptimage2 aspect ratio:** free WxH is snapped to landscape/square/portrait fixed sizes (see Models)
 - **Edit mode requires image_urls (fal):** The script uploads local files to fal.ai storage via upload_file() before calling the edit endpoint

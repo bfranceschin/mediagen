@@ -148,7 +148,7 @@ python3 scripts/mediagen.py \
 |----------|---------|-------------|
 | `--end-image` | — | End frame image (seedance2 i2v only) |
 | `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
-| `--aspect-ratio` | `16:9` | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3` |
+| `--aspect-ratio` | t2v 16:9; i2v inherit | Omit on i2v to match the start frame. Set to force a format. |
 | `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
 | `--camera-fixed` | false | Lock camera (seedance2 only) |
 | `--no-audio` | false | Disable audio (seedance2 only) |

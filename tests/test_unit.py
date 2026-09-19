@@ -128,6 +128,73 @@ class TestGrokPortraitSnap:
         assert mediagen.width_height_to_gpt_aspect(1024, 1280) == "portrait"
 
 
+class TestNearestLabeledAspect:
+    def test_4_5_is_3_4_for_grok_video(self):
+        assert mediagen.nearest_labeled_aspect(1024, 1280, mediagen.GROK_VIDEO_ASPECT_RATIOS) == "3:4"
+
+    def test_4_5_is_3_4_for_seedance(self):
+        assert mediagen.nearest_labeled_aspect(1024, 1280, mediagen.SEEDANCE_ASPECT_RATIOS) == "3:4"
+
+    def test_skips_auto(self):
+        assert mediagen.nearest_labeled_aspect(1024, 1280, {"auto", "3:4", "16:9"}) == "3:4"
+
+    def test_16_9_stays(self):
+        assert mediagen.nearest_labeled_aspect(1280, 720, mediagen.GROK_VIDEO_ASPECT_RATIOS) == "16:9"
+
+
+class TestResolveVideoAspectRatio:
+    def _args(self, **overrides):
+        defaults = {"aspect_ratio": None, "inputs": None, "model": "grokvideo"}
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_t2v_defaults_to_16_9(self):
+        assert mediagen.resolve_video_aspect_ratio(self._args()) == "16:9"
+
+    def test_i2v_inherits_first_frame(self, tmp_path):
+        path = _write_png(tmp_path / "frame.png", 4, 5)
+        assert mediagen.resolve_video_aspect_ratio(
+            self._args(inputs=[str(path)], model="grokvideo")
+        ) == "3:4"
+
+    def test_explicit_16_9_wins_over_portrait_frame(self, tmp_path):
+        path = _write_png(tmp_path / "frame.png", 4, 5)
+        assert mediagen.resolve_video_aspect_ratio(
+            self._args(aspect_ratio="16:9", inputs=[str(path)], model="grokvideo")
+        ) == "16:9"
+
+    def test_unreadable_frame_exits(self, tmp_path):
+        bad = tmp_path / "bad.bin"
+        bad.write_bytes(b"not-an-image")
+        with pytest.raises(SystemExit):
+            mediagen.resolve_video_aspect_ratio(self._args(inputs=[str(bad)]))
+
+
+class TestRunVideoAppliesResolve:
+    def test_i2v_without_flag_inherits_before_dispatch(self, tmp_path, monkeypatch):
+        path = _write_png(tmp_path / "frame.png", 4, 5)
+        captured = {}
+
+        def fake_xai(args):
+            captured["aspect"] = args.aspect_ratio
+
+        monkeypatch.setattr(mediagen, "run_video_xai", fake_xai)
+        args = MagicMock(model="grokvideo", aspect_ratio=None, inputs=[str(path)])
+        mediagen.run_video(args)
+        assert captured["aspect"] == "3:4"
+
+    def test_t2v_without_flag_uses_16_9(self, monkeypatch):
+        captured = {}
+
+        def fake_xai(args):
+            captured["aspect"] = args.aspect_ratio
+
+        monkeypatch.setattr(mediagen, "run_video_xai", fake_xai)
+        args = MagicMock(model="grokvideo", aspect_ratio=None, inputs=None)
+        mediagen.run_video(args)
+        assert captured["aspect"] == "16:9"
+
+
 class TestRunImageAppliesResolve:
     def test_edit_without_flags_inherits_before_dispatch(self, tmp_path, monkeypatch):
         path = _write_png(tmp_path / "src.png", 4, 5)
@@ -454,7 +521,7 @@ class TestValidateArgs:
             "inputs": None,
             "end_image": None,
             "resolution": "720p",
-            "aspect_ratio": "16:9",
+            "aspect_ratio": None,
             "duration": 5,
             "camera_fixed": False,
             "no_audio": False,
@@ -484,6 +551,11 @@ class TestValidateArgs:
         """Basic image args should not raise."""
         args = self._make_image_args()
         mediagen.validate_args(args)  # should not exit
+
+    def test_image_model_with_aspect_ratio_fails(self):
+        args = self._make_image_args(aspect_ratio="16:9")
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
 
     def test_valid_video_args_pass(self):
         """Basic video args should not raise."""
@@ -592,7 +664,7 @@ class TestValidateUpscaleArgs:
             "inputs": ["/a.png"],
             "end_image": None,
             "resolution": "720p",
-            "aspect_ratio": "16:9",
+            "aspect_ratio": None,
             "duration": 5,
             "camera_fixed": False,
             "no_audio": False,
@@ -658,6 +730,10 @@ class TestValidateUpscaleArgs:
         with pytest.raises(SystemExit):
             mediagen.validate_args(self._make_args(width=1280, height=720))
 
+    def test_aspect_ratio_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(aspect_ratio="16:9"))
+
     def test_camera_fixed_fails(self):
         with pytest.raises(SystemExit):
             mediagen.validate_args(self._make_args(camera_fixed=True))
@@ -674,7 +750,7 @@ class TestValidateGrokArgs:
             "inputs": None,
             "end_image": None,
             "resolution": "720p",
-            "aspect_ratio": "16:9",
+            "aspect_ratio": None,
             "duration": 5,
             "camera_fixed": False,
             "no_audio": False,
@@ -728,6 +804,9 @@ class TestValidateGrokArgs:
 
     def test_grokvideo_duration_15_passes(self):
         mediagen.validate_args(self._make_video_args(duration=15))
+
+    def test_grokvideo_omitted_aspect_ratio_passes(self):
+        mediagen.validate_args(self._make_video_args(aspect_ratio=None))
 
     def test_grokvideo_duration_0_fails(self):
         with pytest.raises(SystemExit):

@@ -121,6 +121,7 @@ SEEDVR_FACTOR_MIN = 1
 SEEDVR_FACTOR_MAX = 10
 DEFAULT_IMAGE_WIDTH = 1280
 DEFAULT_IMAGE_HEIGHT = 720
+DEFAULT_VIDEO_ASPECT = "16:9"
 VALID_GPT_QUALITIES = {"low", "medium", "high"}
 VALID_GROK_QUALITIES = {"low", "medium"}
 GROK_MAX_REFERENCE_IMAGES = 3
@@ -510,6 +511,49 @@ def resolve_image_output_size(args) -> tuple[int, int]:
         sys.exit(1)
 
 
+def nearest_labeled_aspect(width: int, height: int, allowed: set[str]) -> str:
+    """Snap WxH onto the nearest labeled ratio in allowed (skip 'auto')."""
+    labels = [label for label in allowed if isinstance(label, str) and label != "auto" and ":" in label]
+    fallback = DEFAULT_VIDEO_ASPECT if DEFAULT_VIDEO_ASPECT in labels else (labels[0] if labels else DEFAULT_VIDEO_ASPECT)
+    if width <= 0 or height <= 0:
+        return fallback
+    target = width / height
+    best = fallback
+    best_err = float("inf")
+    for label in labels:
+        left, right = label.split(":", 1)
+        try:
+            ratio = float(left) / float(right)
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if ratio <= 0:
+            continue
+        err = abs(ratio - target)
+        if err < best_err:
+            best_err = err
+            best = label
+    return best
+
+
+def resolve_video_aspect_ratio(args) -> str:
+    """t2v default 16:9; i2v inherits first --inputs unless --aspect-ratio is set."""
+    aspect = getattr(args, "aspect_ratio", None)
+    model = getattr(args, "model", "")
+    allowed = GROK_VIDEO_ASPECT_RATIOS if model in XAI_VIDEO_MODELS else SEEDANCE_ASPECT_RATIOS
+    if isinstance(aspect, str) and aspect:
+        return aspect
+    inputs = getattr(args, "inputs", None) or []
+    if not inputs:
+        return DEFAULT_VIDEO_ASPECT
+    first = inputs[0]
+    try:
+        width, height = read_image_size(str(first))
+    except ValueError:
+        print(f"ERROR=Could not read image size from {first}")
+        sys.exit(1)
+    return nearest_labeled_aspect(width, height, allowed)
+
+
 def width_height_to_aspect_ratio(width: int, height: int) -> str:
     """Convert width/height to aspect ratio string for nano2."""
     from math import gcd
@@ -742,8 +786,8 @@ def _validate_upscale_args(args):
     if isinstance(duration, int) and duration != 5:
         print("ERROR=--duration is not supported for upscale.")
         sys.exit(1)
-    aspect = getattr(args, "aspect_ratio", "16:9")
-    if isinstance(aspect, str) and aspect != "16:9":
+    aspect = getattr(args, "aspect_ratio", None)
+    if isinstance(aspect, str):
         print("ERROR=--aspect-ratio is not supported for upscale.")
         sys.exit(1)
 
@@ -814,7 +858,7 @@ def validate_args(args):
         if hasattr(args, "resolution") and args.resolution != "720p":
             print("ERROR=--resolution is not supported for image models. Use --width/--height instead.")
             sys.exit(1)
-        if hasattr(args, "aspect_ratio_set") and args.aspect_ratio != "16:9":
+        if isinstance(getattr(args, "aspect_ratio", None), str):
             print("ERROR=--aspect-ratio is not supported for image models. Use --width/--height instead.")
             sys.exit(1)
         if hasattr(args, "duration") and args.duration != 5:
@@ -888,7 +932,7 @@ def validate_args(args):
             if args.no_audio:
                 print("ERROR=--no-audio is not supported for grokvideo.")
                 sys.exit(1)
-            if args.aspect_ratio not in GROK_VIDEO_ASPECT_RATIOS:
+            if isinstance(args.aspect_ratio, str) and args.aspect_ratio not in GROK_VIDEO_ASPECT_RATIOS:
                 print(
                     f"ERROR=--aspect-ratio must be one of {sorted(GROK_VIDEO_ASPECT_RATIOS)} for grokvideo, got '{args.aspect_ratio}'."
                 )
@@ -897,7 +941,7 @@ def validate_args(args):
             if args.duration < 4 or args.duration > 12:
                 print(f"ERROR=--duration must be between 4 and 12 seconds, got {args.duration}.")
                 sys.exit(1)
-            if args.aspect_ratio not in SEEDANCE_ASPECT_RATIOS:
+            if isinstance(args.aspect_ratio, str) and args.aspect_ratio not in SEEDANCE_ASPECT_RATIOS:
                 print(
                     f"ERROR=--aspect-ratio must be one of {sorted(SEEDANCE_ASPECT_RATIOS)}, got '{args.aspect_ratio}'."
                 )
@@ -2068,6 +2112,7 @@ def run_video_xai(args):
 
 def run_video(args):
     """Execute video generation pipeline (text-to-video or image-to-video)."""
+    args.aspect_ratio = resolve_video_aspect_ratio(args)
     if args.model in XAI_VIDEO_MODELS:
         run_video_xai(args)
         return
@@ -2197,7 +2242,7 @@ def main():
         choices=sorted(CLI_RESOLUTIONS),
         help="Video resolution, or SeedVR target (1080p/1440p/2160p)",
     )
-    parser.add_argument("--aspect-ratio", default="16:9", choices=sorted(VALID_ASPECT_RATIOS), help="Video aspect ratio (default: 16:9)")
+    parser.add_argument("--aspect-ratio", default=None, choices=sorted(VALID_ASPECT_RATIOS), help="Video aspect ratio (default: 16:9 t2v, inherit on i2v)")
     parser.add_argument("--duration", type=int, default=5, help="Video duration in seconds (seedance 4-12, grokvideo 1-15; default: 5)")
     parser.add_argument("--camera-fixed", action="store_true", help="Lock camera position — video only")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio generation — video only")

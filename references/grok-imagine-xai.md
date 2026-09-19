@@ -24,7 +24,7 @@
 - Image quality: `low` | `medium` (default `medium`). `high` is rejected
 - Image size: `--width/--height` → nearest Imagine `aspect_ratio`; `max(w,h) ≥ 1536` → `2k`, else `1k`. Generate default `1280×720` → `16:9` / `1k`. **Edit without flags inherits the first input** (4:5 snaps to `3:4`).
 - Video duration: 1–15 seconds (not Seedance's 4–12)
-- Video reuses `--duration`, `--aspect-ratio`, `--resolution`
+- Video reuses `--duration`, `--aspect-ratio`, `--resolution`. **i2v without `--aspect-ratio` inherits the start frame** (4:5 snaps to `3:4`). t2v still defaults to `16:9`.
 - grokvideo rejects `--end-image`, `--camera-fixed`, `--no-audio`
 - Seed: **not supported** → stdout `SEED=n/a`
 - Media URLs are temporary (`imgen.x.ai` / `vidgen.x.ai`) — download immediately into the workspace
