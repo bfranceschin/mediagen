@@ -24,7 +24,7 @@
   - landscape `1536x1024`
   - square `1024x1024`
   - portrait `1024x1536`
-- mediagen maps `--width/--height` → nearest aspect (ratio ≥1.2 landscape, ≤0.833 portrait, else square)
+- mediagen maps `--width/--height` → nearest aspect (ratio ≥1.2 landscape, ≤0.833 portrait, else square). **Edit without flags inherits the first input** (then snaps to those three boxes).
 - Edit: local files as Responses `input_image` data URLs (PNG/JPEG/GIF/WebP, ≤25MB, up to 16)
 - Seed: **not supported** → stdout `SEED=n/a`
 - Output: PNG bytes in SSE `image_generation_call.result` / `partial_image_b64`

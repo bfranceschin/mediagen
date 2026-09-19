@@ -137,8 +137,8 @@ python3 scripts/mediagen.py \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--width` | 1280 | Output width in pixels |
-| `--height` | 720 | Output height in pixels |
+| `--width` | generate 1280; edit inherit | Omit both on edit to keep the first input. Set both to force a format. |
+| `--height` | generate 720; edit inherit | Must be set together with `--width`. |
 | `--steps` | 28 | Inference steps (flux2 only) |
 | `--enable-web-search` | false | Web search grounding (nano2 only) |
 

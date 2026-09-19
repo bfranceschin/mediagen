@@ -30,6 +30,145 @@ class TestAspectRatio:
         assert mediagen.width_height_to_aspect_ratio(1920, 1080) == "16:9"
         assert mediagen.width_height_to_aspect_ratio(1080, 1920) == "9:16"
 
+    def test_portrait_4_5(self):
+        assert mediagen.width_height_to_aspect_ratio(1024, 1280) == "4:5"
+
+
+def _write_png(path: Path, width: int, height: int) -> Path:
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    raw = b"".join(b"\x00" + (b"\xff\x00\x00" * width) for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    )
+    return path
+
+
+def _write_jpeg(path: Path, width: int, height: int) -> Path:
+    # Minimal SOF0 so read_image_size can parse dimensions without a full image.
+    sof = bytes(
+        [
+            0xFF,
+            0xC0,
+            0x00,
+            0x0B,
+            0x08,
+            (height >> 8) & 0xFF,
+            height & 0xFF,
+            (width >> 8) & 0xFF,
+            width & 0xFF,
+            0x01,
+            0x01,
+            0x11,
+            0x00,
+        ]
+    )
+    path.write_bytes(b"\xff\xd8" + sof + b"\xff\xd9")
+    return path
+
+
+class TestReadImageSize:
+    def test_png_portrait(self, tmp_path):
+        path = _write_png(tmp_path / "p.png", 4, 5)
+        assert mediagen.read_image_size(str(path)) == (4, 5)
+
+    def test_jpeg_landscape(self, tmp_path):
+        path = _write_jpeg(tmp_path / "j.jpg", 1280, 720)
+        assert mediagen.read_image_size(str(path)) == (1280, 720)
+
+    def test_missing_file_raises(self):
+        with pytest.raises(ValueError):
+            mediagen.read_image_size("/no/such.png")
+
+
+class TestResolveImageOutputSize:
+    def _args(self, **overrides):
+        defaults = {"width": None, "height": None, "inputs": None, "model": "grokimage2"}
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
+    def test_generate_defaults_to_1280x720(self):
+        assert mediagen.resolve_image_output_size(self._args()) == (1280, 720)
+
+    def test_edit_inherits_first_input(self, tmp_path):
+        path = _write_png(tmp_path / "src.png", 4, 5)
+        assert mediagen.resolve_image_output_size(self._args(inputs=[str(path)])) == (4, 5)
+
+    def test_explicit_width_height_win_over_source(self, tmp_path):
+        path = _write_png(tmp_path / "src.png", 4, 5)
+        args = self._args(width=1280, height=720, inputs=[str(path)])
+        assert mediagen.resolve_image_output_size(args) == (1280, 720)
+
+    def test_only_width_exits(self):
+        with pytest.raises(SystemExit):
+            mediagen.resolve_image_output_size(self._args(width=1280, height=None))
+
+    def test_only_height_exits(self):
+        with pytest.raises(SystemExit):
+            mediagen.resolve_image_output_size(self._args(width=None, height=720))
+
+    def test_unreadable_edit_input_exits(self, tmp_path):
+        bad = tmp_path / "bad.bin"
+        bad.write_bytes(b"not-an-image")
+        with pytest.raises(SystemExit):
+            mediagen.resolve_image_output_size(self._args(inputs=[str(bad)]))
+
+
+class TestGrokPortraitSnap:
+    def test_4_5_snaps_to_3_4(self):
+        assert mediagen.width_height_to_grok_aspect(1024, 1280) == "3:4"
+
+    def test_4_5_is_gpt_portrait(self):
+        assert mediagen.width_height_to_gpt_aspect(1024, 1280) == "portrait"
+
+
+class TestRunImageAppliesResolve:
+    def test_edit_without_flags_inherits_before_dispatch(self, tmp_path, monkeypatch):
+        path = _write_png(tmp_path / "src.png", 4, 5)
+        captured = {}
+
+        def fake_xai(args):
+            captured["wh"] = (args.width, args.height)
+
+        monkeypatch.setattr(mediagen, "run_image_xai", fake_xai)
+        args = MagicMock(model="grokimage2", width=None, height=None, inputs=[str(path)])
+        mediagen.run_image(args)
+        assert captured["wh"] == (4, 5)
+
+    def test_generate_without_flags_uses_1280x720(self, monkeypatch):
+        captured = {}
+
+        def fake_xai(args):
+            captured["wh"] = (args.width, args.height)
+
+        monkeypatch.setattr(mediagen, "run_image_xai", fake_xai)
+        args = MagicMock(model="grokimage2", width=None, height=None, inputs=None)
+        mediagen.run_image(args)
+        assert captured["wh"] == (1280, 720)
+
+    def test_upscale_skips_resolve(self, monkeypatch):
+        called = {"upscale": False, "resolve": False}
+
+        def fake_upscale(args):
+            called["upscale"] = True
+
+        def fake_resolve(args):
+            called["resolve"] = True
+            return (1, 1)
+
+        monkeypatch.setattr(mediagen, "run_image_upscale", fake_upscale)
+        monkeypatch.setattr(mediagen, "resolve_image_output_size", fake_resolve)
+        args = MagicMock(model="seedvr", width=None, height=None, inputs=["/a.png"])
+        mediagen.run_image(args)
+        assert called["upscale"] is True
+        assert called["resolve"] is False
+
 
 # ── build_flux2_args ─────────────────────────────────────────────────────────
 
@@ -326,8 +465,8 @@ class TestValidateArgs:
     def _make_video_args(self, **overrides):
         defaults = {
             "model": "seedance2",
-            "width": 1280,
-            "height": 720,
+            "width": None,
+            "height": None,
             "steps": 28,
             "enable_web_search": False,
             "inputs": None,
@@ -350,6 +489,11 @@ class TestValidateArgs:
         """Basic video args should not raise."""
         args = self._make_video_args()
         mediagen.validate_args(args)  # should not exit
+
+    def test_video_model_with_width_height_fails(self):
+        args = self._make_video_args(width=1280, height=720)
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(args)
 
     def test_video_duration_too_low(self):
         """Duration < 4 should fail."""
@@ -441,8 +585,8 @@ class TestValidateUpscaleArgs:
         defaults = {
             "model": "seedvr",
             "prompt": None,
-            "width": 1280,
-            "height": 720,
+            "width": None,
+            "height": None,
             "steps": 28,
             "enable_web_search": False,
             "inputs": ["/a.png"],
@@ -510,6 +654,10 @@ class TestValidateUpscaleArgs:
         with pytest.raises(SystemExit):
             mediagen.validate_args(self._make_args(width=1920))
 
+    def test_defaultish_1280x720_fails(self):
+        with pytest.raises(SystemExit):
+            mediagen.validate_args(self._make_args(width=1280, height=720))
+
     def test_camera_fixed_fails(self):
         with pytest.raises(SystemExit):
             mediagen.validate_args(self._make_args(camera_fixed=True))
@@ -539,8 +687,8 @@ class TestValidateGrokArgs:
     def _make_video_args(self, **overrides):
         defaults = {
             "model": "grokvideo",
-            "width": 1280,
-            "height": 720,
+            "width": None,
+            "height": None,
             "steps": 28,
             "enable_web_search": False,
             "inputs": None,

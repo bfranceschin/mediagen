@@ -58,6 +58,7 @@ import json
 import os
 import shutil
 import signal
+import struct
 import sys
 import time
 import urllib.request
@@ -118,6 +119,8 @@ SEEDVR_ENDPOINT = "fal-ai/seedvr/upscale/image"
 SEEDVR_DEFAULT_FACTOR = 2
 SEEDVR_FACTOR_MIN = 1
 SEEDVR_FACTOR_MAX = 10
+DEFAULT_IMAGE_WIDTH = 1280
+DEFAULT_IMAGE_HEIGHT = 720
 VALID_GPT_QUALITIES = {"low", "medium", "high"}
 VALID_GROK_QUALITIES = {"low", "medium"}
 GROK_MAX_REFERENCE_IMAGES = 3
@@ -401,6 +404,112 @@ def download_file(url: str, dest: Path):
     urllib.request.urlretrieve(url, str(dest))
 
 
+def read_image_size(path: str) -> tuple[int, int]:
+    """Return (width, height) from a local image. Raise ValueError if unreadable."""
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"Input file not found: {path}")
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"Could not read image size from {path}") from exc
+    size = _parse_image_size(data)
+    if size is None:
+        raise ValueError(f"Could not read image size from {path}")
+    return size
+
+
+def _parse_image_size(data: bytes) -> Optional[tuple[int, int]]:
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        width, height = struct.unpack(">II", data[16:24])
+        return _positive_size(width, height)
+    if len(data) >= 2 and data[:2] == b"\xff\xd8":
+        return _jpeg_size(data)
+    if len(data) >= 10 and data[:6] in (b"GIF87a", b"GIF89a"):
+        width, height = struct.unpack("<HH", data[6:10])
+        return _positive_size(width, height)
+    if len(data) >= 16 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return _webp_size(data)
+    return None
+
+
+def _positive_size(width: int, height: int) -> Optional[tuple[int, int]]:
+    if width > 0 and height > 0:
+        return int(width), int(height)
+    return None
+
+
+def _jpeg_size(data: bytes) -> Optional[tuple[int, int]]:
+    i = 2
+    n = len(data)
+    while i + 8 < n:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+            height, width = struct.unpack(">HH", data[i + 5 : i + 9])
+            return _positive_size(width, height)
+        if marker in (0xD8, 0xD9) or marker < 0xC0:
+            i += 2
+            continue
+        if i + 4 > n:
+            break
+        seglen = struct.unpack(">H", data[i + 2 : i + 4])[0]
+        if seglen < 2:
+            break
+        i += 2 + seglen
+    return None
+
+
+def _webp_size(data: bytes) -> Optional[tuple[int, int]]:
+    chunk = data[12:16]
+    if chunk == b"VP8X" and len(data) >= 30:
+        width = 1 + int.from_bytes(data[24:27], "little")
+        height = 1 + int.from_bytes(data[27:30], "little")
+        return _positive_size(width, height)
+    if chunk == b"VP8 " and len(data) >= 30:
+        start = data.find(b"\x9d\x01\x2a")
+        if start != -1 and start + 7 <= len(data):
+            packed = struct.unpack("<I", data[start + 3 : start + 7])[0]
+            width = packed & 0x3FFF
+            height = (packed >> 16) & 0x3FFF
+            return _positive_size(width, height)
+    if chunk == b"VP8L" and len(data) >= 25:
+        bits = struct.unpack("<I", data[21:25])[0]
+        width = (bits & 0x3FFF) + 1
+        height = ((bits >> 14) & 0x3FFF) + 1
+        return _positive_size(width, height)
+    return None
+
+
+def resolve_image_output_size(args) -> tuple[int, int]:
+    """Generate default 1280x720; edit inherits first --inputs unless both flags set."""
+    width = getattr(args, "width", None)
+    height = getattr(args, "height", None)
+    if not isinstance(width, int) or isinstance(width, bool):
+        width = None
+    if not isinstance(height, int) or isinstance(height, bool):
+        height = None
+    if (width is None) ^ (height is None):
+        print("ERROR=--width and --height must be set together.")
+        sys.exit(1)
+    if width is not None and height is not None:
+        if width <= 0 or height <= 0:
+            print("ERROR=--width and --height must be positive.")
+            sys.exit(1)
+        return width, height
+    inputs = getattr(args, "inputs", None) or []
+    if not inputs:
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+    first = inputs[0]
+    try:
+        return read_image_size(str(first))
+    except ValueError:
+        print(f"ERROR=Could not read image size from {first}")
+        sys.exit(1)
+
+
 def width_height_to_aspect_ratio(width: int, height: int) -> str:
     """Convert width/height to aspect ratio string for nano2."""
     from math import gcd
@@ -607,7 +716,7 @@ def _validate_upscale_args(args):
     if not inputs or len(inputs) != 1:
         print("ERROR=Upscale requires exactly one input image (--inputs <path>).")
         sys.exit(1)
-    if getattr(args, "width", 1280) != 1280 or getattr(args, "height", 720) != 720:
+    if getattr(args, "width", None) is not None or getattr(args, "height", None) is not None:
         print("ERROR=--width/--height are not supported for upscale. Use --upscale-factor or --resolution.")
         sys.exit(1)
     if getattr(args, "steps", 28) != 28:
@@ -687,11 +796,9 @@ def validate_args(args):
 
     # Image-only args used with video model
     if is_video_model:
-        if hasattr(args, "width") and (args.width != 1280 or args.height != 720):
-            # width/height were explicitly changed from defaults — not valid for video
-            if args.width != 1280 or args.height != 720:
-                print("ERROR=--width/--height are not supported for video models. Use --aspect-ratio and --resolution instead.")
-                sys.exit(1)
+        if getattr(args, "width", None) is not None or getattr(args, "height", None) is not None:
+            print("ERROR=--width/--height are not supported for video models. Use --aspect-ratio and --resolution instead.")
+            sys.exit(1)
         if args.steps != 28:
             print("ERROR=--steps is not supported for video models.")
             sys.exit(1)
@@ -1867,7 +1974,9 @@ def run_image(args):
     """Route image models to fal.ai, Codex, xAI, or SeedVR upscale."""
     if is_upscale_model(args.model):
         run_image_upscale(args)
-    elif args.model in CODEX_IMAGE_MODELS:
+        return
+    args.width, args.height = resolve_image_output_size(args)
+    if args.model in CODEX_IMAGE_MODELS:
         run_image_codex(args)
     elif args.model in XAI_IMAGE_MODELS:
         run_image_xai(args)
@@ -2062,8 +2171,8 @@ def main():
 
     # Image args
     parser.add_argument("--inputs", nargs="*", default=None, help="Input images: for image edit, upscale, or image-to-video")
-    parser.add_argument("--width", type=int, default=1280, help="Output width — image only (default: 1280)")
-    parser.add_argument("--height", type=int, default=720, help="Output height — image only (default: 720)")
+    parser.add_argument("--width", type=int, default=None, help="Output width — image only (default: 1280 generate, inherit on edit)")
+    parser.add_argument("--height", type=int, default=None, help="Output height — image only (default: 720 generate, inherit on edit)")
     parser.add_argument("--steps", type=int, default=28, help="Inference steps — flux2 only (default: 28)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random; ignored by gptimage2 and grok)")
     parser.add_argument("--enable-web-search", action="store_true", help="Enable web search — nano2 only")

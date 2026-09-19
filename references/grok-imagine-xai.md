@@ -22,7 +22,7 @@
 - Image model: `grok-imagine-image-2.0` (alias `grokimage2`)
 - Video model: `grok-imagine-video-1.5` (alias `grokvideo`)
 - Image quality: `low` | `medium` (default `medium`). `high` is rejected
-- Image size: `--width/--height` → nearest Imagine `aspect_ratio`; `max(w,h) ≥ 1536` → `2k`, else `1k`. `1280×720` → `16:9` / `1k`
+- Image size: `--width/--height` → nearest Imagine `aspect_ratio`; `max(w,h) ≥ 1536` → `2k`, else `1k`. Generate default `1280×720` → `16:9` / `1k`. **Edit without flags inherits the first input** (4:5 snaps to `3:4`).
 - Video duration: 1–15 seconds (not Seedance's 4–12)
 - Video reuses `--duration`, `--aspect-ratio`, `--resolution`
 - grokvideo rejects `--end-image`, `--camera-fixed`, `--no-audio`

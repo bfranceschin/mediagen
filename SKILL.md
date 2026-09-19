@@ -50,7 +50,7 @@ $PYTHON $SCRIPT \
   --model <flux2|nano2|gptimage2|grokimage2> \
   --prompt "edit instruction here" \
   --inputs /path/to/image1.png [/path/to/image2.png ...] \
-  [--width 1280] [--height 720] \
+  [--width W] [--height H] \
   [--steps 28] [--seed 42] \
   [--enable-web-search] \
   [--quality low|medium|high]
@@ -108,8 +108,8 @@ $PYTHON $SCRIPT \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--width` | 1280 | Output width in pixels (fal exact; gptimage2/grokimage2 mapped) |
-| `--height` | 720 | Output height in pixels |
+| `--width` | generate 1280; edit inherit | Output width. Omit both on **edit** to keep the first input's size. Pass both only when the user asks for another format. |
+| `--height` | generate 720; edit inherit | Output height. Must be set together with `--width`. |
 | `--steps` | 28 | Inference steps (**flux2 only**) |
 | `--enable-web-search` | false | Web search grounding (**nano2 only**) |
 | `--quality` | `medium` | gptimage2: `low`/`medium`/`high`; grokimage2: `low`/`medium` (**high rejected**) |
@@ -379,6 +379,7 @@ For best results with Seedance, structure prompts like a professional shot descr
 - **fal_client.subscribe() has NO timeout param:** Do NOT pass `timeout=` to `fal_client.subscribe()` — it will raise TypeError. The script uses `signal.SIGALRM` for timeout instead
 - **fal_client.upload() crashes:** Do NOT use `fal_client.upload(file_handle)` — it crashes with `TypeError: object of type '_io.BufferedReader' has no len()`. Always use `fal_client.upload_file(path_string)` which accepts a file path directly
 - **Large input files:** fal_client.upload_file() handles this, but very large images (>10MB) may be slow; gptimage2 hard-caps inputs at 25MB
+- **Edit keeps source aspect unless asked otherwise:** omit `--width`/`--height` on image edit. The script reads the first `--inputs` file. If the user asks for 16:9 / landscape / square / 9:16 / etc., pass **both** flags. Do not omit flags and hope the prompt changes the frame. Grok snaps to a closed list (4:5 → 3:4); GPT Image 2 only has landscape/square/portrait; Flux is closest to the source pixels.
 - **Nano2 aspect ratio:** The script converts --width/--height to aspect ratio automatically. Non-standard ratios may be rounded
 - **gptimage2 aspect ratio:** free WxH is snapped to landscape/square/portrait fixed sizes (see Models)
 - **Edit mode requires image_urls (fal):** The script uploads local files to fal.ai storage via upload_file() before calling the edit endpoint
