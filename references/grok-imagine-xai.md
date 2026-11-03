@@ -6,8 +6,8 @@
 - Do **not** switch Hermes global `image_gen.provider` or `video_gen.provider` just to use these models — the skill talks to `api.x.ai` directly
 
 ## Auth
-- Preferred: Hermes `xai-oauth` (`hermes auth add xai-oauth --type oauth`)
-- Resolver: `tools.xai_http.resolve_xai_http_credentials` (OAuth pool first), then `hermes_cli.auth.resolve_xai_oauth_runtime_credentials`, then `XAI_API_KEY`
+- Preferred: Hermes `xai-oauth` (`hermes auth add xai-oauth --type oauth`). Grok Video 1.5 is the preferred video route; image uses Image 2.0 medium.
+- Resolve subscription OAuth first. A separately billed `XAI_API_KEY` requires explicit CLI opt-in and user authorization; never silently fall back when OAuth is missing or quota fails. Shared Hermes resolver helpers may themselves return API-key credentials, so check provider provenance before any request.
 - Always run the script with Hermes venv Python so helpers + `httpx` resolve:
   ```bash
   ~/.hermes/hermes-agent/venv/bin/python \
@@ -69,8 +69,9 @@ Cheap smoke:
 | `httpx not installed` | wrong interpreter | Hermes venv |
 
 ## Defaults / product choice
-- Keep **fal.ai** (`flux2`/`nano2`/`seedance2`) as the day-to-day default
-- Use **`grokimage2` / `grokvideo` when explicitly requested**
+- Evaluate existing **SuperGrok subscription/OAuth** image and video options before separately billed fal/API alternatives.
+- OAuth authentication alone does not prove included usage: verify entitlements when uncertain and never silently fall back to a separately billed API key.
+- Keep runtime defaults unchanged unless the user authorizes changing them.
 - Do **not** auto-promote Grok or rewrite `image_gen.provider` / `video_gen.provider`
 
 ## Out of scope (see docs/FUTURE.md)

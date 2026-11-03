@@ -6,6 +6,17 @@ from pathlib import Path
 
 import pytest
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "integration: paid API generation (disabled locally)")
+
+
+def pytest_collection_modifyitems(config, items):
+    # This local upgrade suite must never run paid generation.
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(pytest.mark.skip(reason="paid generation disabled in local suite"))
+
+
 # Add scripts/ to path so we can import mediagen as a module
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 

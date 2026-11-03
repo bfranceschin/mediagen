@@ -1,404 +1,108 @@
 ---
 name: mediagen
-description: "Generate, edit, and upscale images/videos via fal.ai (FLUX.2, Nano Banana 2, Seedance, SeedVR2), GPT Image 2 via ChatGPT/Codex OAuth, and Grok Imagine via xAI (grokimage2 / grokvideo). Script handles API calls, file I/O, logging, and .md creation. Use this skill instead of the native image_generate tool unless the user explicitly asks for it."
+description: "Generate/edit media: Codex GPT, SuperGrok, fal Nano 2.1."
 repository: https://github.com/bfranceschin/mediagen
 ---
 
-# mediagen — Image & Video Generation (v2.1)
+# mediagen — subscription-first media generation
 
-Generate and edit images and videos with full persistence, logging, and edit support.
+Use this skill for image/video generation, editing and upscaling unless the user explicitly requests the native tool. Run the installed CLI; do not change Hermes global providers.
 
-**Backends:**
-- **fal.ai** (`FAL_KEY`): `flux2`, `nano2`, `seedance2`, `seedvr` (upscale; alias `upscale`)
-- **ChatGPT/Codex OAuth** (no OpenAI API key): `gptimage2`
-- **xAI Grok Imagine** (OAuth first, then `XAI_API_KEY`): `grokimage2`, `grokvideo`
+## Selection policy
 
-Default stack stays on fal.ai. Use `gptimage2` / `grokimage2` / `grokvideo` only when the user asks for those models. Do not silently switch Hermes global `image_gen.provider` or `video_gen.provider`.
+1. **Images:** prefer ChatGPT/Codex OAuth (`gptimage2`, upgraded GPT Image 2.5 Sunburst). Grok Image 2.0 (`grokimage2`, SuperGrok OAuth) is the other subscription-backed option.
+2. **Video:** prefer `grokvideo` (Grok Imagine Video 1.5 via SuperGrok OAuth).
+3. Evaluate separately billed fal options only when subscriptions lack quota, required capability, availability, or adequate results. Explain additional spend before falling back. Never silently use an API key instead of OAuth.
+4. Nano Banana is upgraded to **2.1**; FLUX.2 dev and Seedance 1.5 Pro are retained, not replaced. Do not add MiniMax/Wan or change global providers without authorization.
+5. OAuth authentication identifies the credential route, not a guarantee of unlimited or included usage. Respect actual account entitlements and quota errors.
 
-### Support files
-- `references/gptimage2-codex.md` — Codex OAuth API surface, sizes/quality, smoke-test without touching global image_gen, failure table
-- `references/grok-imagine-xai.md` — xAI OAuth/API key, Imagine params, smoke-test without touching global providers, failure table
-- `references/seedvr-upscale.md` — SeedVR2 upscale schema, cost, CLI, failure table
-- `docs/FUTURE.md` — Grok features and extra fal upscalers not in this CLI
-
-## When to Use
-
-**Always use mediagen** for image/video generation unless the user explicitly asks for the native `image_generate` tool.
-
-## Quick Reference
-
-### Image Generate mode (no input images)
+## Runtime
 
 ```bash
-# Prefer Hermes venv (needed for gptimage2 auth helpers + fal_client):
 PYTHON=~/.hermes/hermes-agent/venv/bin/python
 SCRIPT=~/.hermes/skills/media/mediagen/scripts/mediagen.py
-
-$PYTHON $SCRIPT \
-  --model <flux2|nano2|gptimage2|grokimage2> \
-  --prompt "your prompt here" \
-  [--width 1280] [--height 720] \
-  [--steps 28] [--seed 42] \
-  [--enable-web-search] \
-  [--quality low|medium|high]
+$PYTHON $SCRIPT --help
 ```
 
-### Image Edit mode (with input images)
+Always use Hermes venv (auth helpers, httpx, fal_client). CLI `--model` is explicit; selection policy above guides the agent, not an automatic cross-provider fallback.
+
+## Common commands
 
 ```bash
-$PYTHON $SCRIPT \
-  --model <flux2|nano2|gptimage2|grokimage2> \
-  --prompt "edit instruction here" \
-  --inputs /path/to/image1.png [/path/to/image2.png ...] \
-  [--width W] [--height H] \
-  [--steps 28] [--seed 42] \
-  [--enable-web-search] \
-  [--quality low|medium|high]
+# Preferred image route (ChatGPT/Codex subscription)
+$PYTHON $SCRIPT --model gptimage2 --quality high --prompt "..."
+# Edit: omit dimensions to inherit source framing
+$PYTHON $SCRIPT --model gptimage2 --quality high --inputs /path/input.png --prompt "..."
+# SuperGrok image alternative
+$PYTHON $SCRIPT --model grokimage2 --quality medium --prompt "..."
+# Preferred video route (SuperGrok)
+$PYTHON $SCRIPT --model grokvideo --duration 5 --resolution 720p --prompt "..."
+$PYTHON $SCRIPT --model grokvideo --inputs /path/start.png --duration 5 --prompt "..."
+# Separately billed Nano Banana 2.1; legacy CLI name retained
+$PYTHON $SCRIPT --model nano2 --prompt "..."
+# Separately billed FLUX alternative
+$PYTHON $SCRIPT --model flux2 --width 1280 --height 720 --steps 28 --prompt "..."
+# Opt-in upscale; never chain automatically
+$PYTHON $SCRIPT --model seedvr --inputs /path/input.png --upscale-factor 2
 ```
 
-### Image Upscale mode (exactly one input; never auto after generate)
+GPT selector: `--image-model gpt-image-2.5-sunburst|gpt-image-2.5-flare|gpt-image-2`; default Sunburst (override default with `MEDIAGEN_GPT_IMAGE_MODEL`). Nano: `nano2` and `nano21` both select 2.1; `--resolution 1K|2K|4K` (default 1K), `--thinking-level minimal|medium|high` (default medium). Explicit separately billed xAI API-key opt-in: `--allow-xai-api-key`. Preserve the `FILENAME=... PROMPT=... SEED=...` last-line output contract.
 
-```bash
-$PYTHON $SCRIPT \
-  --model seedvr \
-  --inputs /path/to/image.png \
-  [--upscale-factor 2] \
-  [--resolution 1080p|1440p|2160p] \
-  [--seed 42]
-```
+## Models and routes
 
-`--model upscale` is an alias of `seedvr`. `--prompt` is optional (`PROMPT=upscale` if omitted). Do **not** chain this after every generate.
+| CLI model | Backend / actual model | Role |
+|---|---|---|
+| `gptimage2` | Codex OAuth / GPT Image 2.5 Sunburst | Preferred images; legacy name retained |
+| `grokimage2` | xAI OAuth / `grok-imagine-image-2.0` | Subscription image alternative, `medium` quality |
+| `grokvideo` | xAI OAuth / `grok-imagine-video-1.5` | Preferred video |
+| `nano2` / `nano21` | fal / `google/nano-banana-2.1` and `/edit` | Paid Nano alternative; upgraded from 2 |
+| `flux2` | fal / `fal-ai/flux-2` and `/edit` | Paid budget alternative; unchanged |
+| `seedance2` | fal / `fal-ai/bytedance/seedance/v1.5/pro/{text-to-video,image-to-video}` | Paid feature alternative; **not Seedance 2** |
+| `seedvr` / `upscale` | fal / `fal-ai/seedvr/upscale/image` | Opt-in super-resolution |
 
-### Video Text-to-Video mode
+Nano 2.1 bills by tokens, not a fixed per-image tariff. Published fal measurements (short 16:9 prompt, minimal/medium thinking) are ~$0.0396 at 1K and ~$0.0593 at 2K; actual cost varies with prompt, references, search and thinking. Source: https://fal.ai/nano-banana-2.1 . Do not reuse Nano 2's old ~$0.05 estimate.
 
-```bash
-$PYTHON $SCRIPT \
-  --model <seedance2|grokvideo> \
-  --prompt "your video prompt here" \
-  [--resolution 720p] [--aspect-ratio 16:9] \
-  [--duration 5] [--seed 42] \
-  [--camera-fixed] [--no-audio]
-```
+FLUX.2 dev generation: ~$0.012/MP; edit may bill inputs too. Seedance 1.5 Pro: ~$0.26 per 720p 5s with audio, roughly half without. SeedVR2: ~$0.001/MP output. Recheck live rates before estimates. Subscription usage is subject to account limits, not equivalent to unlimited free generation.
 
-### Video Image-to-Video mode (with start frame)
+## Framing and parameters
 
-```bash
-$PYTHON $SCRIPT \
-  --model <seedance2|grokvideo> \
-  --prompt "motion and sound description" \
-  --inputs /path/to/start_frame.png \
-  [--end-image /path/to/end_frame.png] \
-  [--resolution 720p] [--aspect-ratio RATIO] \
-  [--duration 5] [--seed 42] \
-  [--camera-fixed] [--no-audio]
-```
+- Generate defaults to 1280×720. On image edit omit width/height to inherit the first input; to change format explicitly pass **both**. GPT maps to fixed supported boxes; Grok snaps to supported ratios. A prompt alone does not select output dimensions.
+- Nano width/height controls aspect ratio; use the Nano-specific resolution control for 1K/2K/4K. Thinking is separately selectable. Never assume a larger width alone selects 2K.
+- GPT quality and image-model selector must be validated together; extra `xhigh`/`max` tiers belong to 2.5, not legacy GPT Image 2. The top-level Codex chat model hosts the tool and is not the image model.
+- Grok image supports `low`/`medium`, not `high`. Default `medium` already requests finer detail. Long edge ≥1536 selects 2K, otherwise 1K.
+- On image-to-video omit `--aspect-ratio` to inherit the start frame; text-to-video defaults to 16:9. Grok 4:5 snaps to 3:4.
+- Grok video supports 1–15s; rejects `--end-image`, `--camera-fixed`, `--no-audio` in this CLI. Seedance supports 4–12s, optional end frame and those controls.
+- Seeds work for FLUX/Seedance/SeedVR; GPT and Grok have no seed. Nano may return a null seed: do not treat provided seeds as guaranteed reproducibility.
+- Upscale takes exactly one input. Use factor 1–10 (default 2) or target `--resolution 1080p|1440p|2160p`, not both. GPT/Grok edit-at-larger-size is a redraw, not super-resolution.
 
-## Arguments
+## Persistence and delivery
 
-### Shared
+All outputs live in `~/.hermes/workspace/mediagen/`:
+- `images/raw/`, `videos/raw/`: persistent media binaries
+- `images/*.md`, `videos/*.md`: local legacy sidecars
+- `external/`: copies of user inputs
+- `logs/`: generation JSON (record real provider, image model, quality and parameters)
+- `receipts/`: durable optional Hostkit Media sync receipts
 
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedvr`/`upscale`, `seedance2`, or `grokvideo` |
-| `--prompt` | Yes except upscale | — | Text prompt or edit instruction. Optional for `seedvr`/`upscale` |
-| `--inputs` | No | — | Input images: 1-4 for fal image edit, up to 16 for gptimage2 edit, up to 3 for grokimage2 edit, **exactly 1 for upscale**, exactly 1 for image-to-video |
-| `--seed` | No | random | Reproducibility seed (fal/seedance/seedvr; ignored by gptimage2 and Grok) |
+Generated media must be downloaded immediately; remote Grok/fal URLs can expire. Deliver the local file with `MEDIA:<absolute path>`; include model and relevant quality/duration settings. No need to expose internal request URLs.
 
-### Image-only
+Hostkit Media sync is optional after local persistence. `MEDIA_API_URL`, `MEDIA_API_TOKEN_FILE`, `MEDIA_UPLOAD_TIMEOUT_SECONDS` configure it. Upload binary assets and generation runs, not legacy markdown. Sync errors must not turn a successful local generation into failure or break final stdout. Input roles: `edit_source`, `upscale_source`, `start_frame`, `end_frame`. Media seed is integer or null, never `"n/a"`.
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--width` | generate 1280; edit inherit | Output width. Omit both on **edit** to keep the first input's size. Pass both only when the user asks for another format. |
-| `--height` | generate 720; edit inherit | Output height. Must be set together with `--width`. |
-| `--steps` | 28 | Inference steps (**flux2 only**) |
-| `--enable-web-search` | false | Web search grounding (**nano2 only**) |
-| `--quality` | `medium` | gptimage2: `low`/`medium`/`high`; grokimage2: `low`/`medium` (**high rejected**) |
-| `--upscale-factor` | `2` | SeedVR factor 1–10. Mutually exclusive with `--resolution` 1080p/1440p/2160p |
+## Important failure handling
 
-### Video-only
+- Never silently cross from subscription OAuth to separately billed API keys/fal. Stop with a clear error; use the CLI's explicit opt-in for API-key billing only with user authorization.
+- Missing old Codex token helper is not proof of logout. Use `hermes_cli.auth_codex.resolve_codex_runtime_credentials()` when needed, without printing credentials.
+- Codex host model may be overridden by `MEDIAGEN_CODEX_CHAT_MODEL`; choose a verified account-supported model. Changing the host alone does not upgrade the image model.
+- Public OpenAI API model support does not establish parity on `chatgpt.com/backend-api/codex/responses`; smoke-test the actual OAuth route. Retain explicit legacy selection rather than quietly downgrading on errors.
+- fal requires `FAL_KEY`. Never print secrets. Missing/expired auth or exhausted subscription quota must not trigger paid fallback.
+- `fal_client.subscribe()` has no timeout argument; use the script's timeout mechanism. Upload local files with `fal_client.upload_file(path)`, not `upload(file_handle)`.
+- FLUX.2 may adjust requested dimensions (1280×720 → 1280×736). FLUX edit tends to preserve viewpoint; for radical perspective/composition changes prefer subscription GPT/Grok first, Nano as a paid alternative.
+- Seedance native-audio content validation can be stricter than visual-only. Offer `--no-audio` when appropriate, without retrying indefinitely or assuming visual flags disable server-side policy.
+- Default timeouts: fal image 120s; GPT/Grok/upscale/video 300s. Treat timeouts as uncertain request outcomes rather than blindly resubmitting repeatedly.
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--end-image` | — | End frame image (**seedance2** i2v only; rejected by grokvideo) |
-| `--resolution` | `720p` | Video: `480p`, `720p`, or `1080p`. SeedVR target: `1080p`, `1440p`, or `2160p` (720p on seedvr = factor mode) |
-| `--aspect-ratio` | t2v 16:9; i2v inherit | seedance: `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `auto`; grokvideo also `3:2`/`2:3`, not `21:9`/`auto`. Omit on **i2v** to match the start frame (4:5 → 3:4). |
-| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
-| `--camera-fixed` | false | Lock camera (**seedance2** only; rejected by grokvideo) |
-| `--no-audio` | false | Disable audio (**seedance2** only; rejected by grokvideo) |
+## References
 
-## Models
-
-### FLUX.2 [dev] — `flux2`
-- **Backend:** fal.ai
-- **Endpoint:** `fal-ai/flux-2` (generate) / `fal-ai/flux-2/edit` (edit)
-- **Strengths:** High-quality photorealistic and artistic images, full parameter control
-- **Cost:** ~$0.012/MP (≈$0.01 for 1280×720)
-- **Best for:** Most generation tasks, detailed artistic control
-
-### Nano Banana 2 — `nano2`
-- **Backend:** fal.ai
-- **Endpoint:** `fal-ai/nano-banana-2` (generate) / `fal-ai/nano-banana-2/edit` (edit)
-- **Strengths:** Multimodal reasoning, excellent text rendering, character consistency, web search grounding
-- **Cost:** ~$0.05/image
-- **Best for:** Images with text, complex composition reasoning, web-grounded generation
-
-### GPT Image 2 — `gptimage2`
-- **Backend:** ChatGPT/Codex OAuth (Hermes `openai-codex` auth). **No OpenAI API key** and **not fal.ai**
-- **Endpoint label logs as:** `openai-codex/gpt-image-2` (+ `/edit`)
-- **Auth prerequisite:** `hermes auth add openai-codex`
-- **Quality tiers:** `--quality low|medium|high` (default `medium`)
-- **Sizes:** mapped from `--width`/`--height` to nearest fixed GPT size:
-  - landscape → `1536×1024`
-  - square → `1024×1024`
-  - portrait → `1024×1536`
-- **Edit:** pass local images via `--inputs` (sent as Responses `input_image` data URLs)
-- **Seed:** not supported by the API (logged as `n/a`)
-- **Best for:** when you want GPT Image 2 charged/usage against ChatGPT, strong prompt adherence, or to save fal credits
-- **Runtime:** always use Hermes venv Python so Codex token helpers + `httpx` resolve:
-  `~/.hermes/hermes-agent/venv/bin/python`
-
-### Grok Imagine Image — `grokimage2`
-- **Backend:** xAI (`xai-oauth` first, then `XAI_API_KEY`). **Not fal.ai**
-- **API model:** `grok-imagine-image-2.0`
-- **Endpoints:** `https://api.x.ai/v1/images/generations` / `.../images/edits`
-- **Auth prerequisite:** `hermes auth add xai-oauth --type oauth` (or `XAI_API_KEY`)
-- **Quality:** `--quality low|medium` (default `medium`). `high` → ERROR
-- **Sizes:** `--width/--height` mapped to Imagine `aspect_ratio`; long edge ≥1536 → `2k`, else `1k`. `1280×720` → `16:9` / `1k`
-- **Edit:** `--inputs` as data URLs, up to 3
-- **Seed:** not supported (`SEED=n/a`)
-- **Runtime:** Hermes venv Python
-- **Not an upscaler:** generate/edit only; 1k/2k is not super-resolution of an existing file. Use `seedvr` on the PNG.
-
-### SeedVR2 Upscale — `seedvr` (alias `upscale`)
-- **Backend:** fal.ai
-- **Endpoint:** `fal-ai/seedvr/upscale/image`
-- **Input:** exactly one local image (`--inputs`)
-- **Modes:** `--upscale-factor` 1–10 (default 2) **or** `--resolution 1080p|1440p|2160p` (target). Do not combine a non-default factor with a target resolution
-- **Cost:** $0.001/MP of **output** (~$0.004 for 2× of 1280×720)
-- **Output:** PNG; filename `*_seedvr_upscale.png`; `PROMPT=upscale` if `--prompt` omitted
-- **Never auto-run** after generate/edit
-- **Not GPT/Grok:** those APIs have no upscale endpoint; edit-at-larger-size is a redraw
-
-### Grok Imagine Video — `grokvideo`
-- **Backend:** xAI (`xai-oauth` first, then `XAI_API_KEY`). **Not fal.ai**
-- **API model:** `grok-imagine-video-1.5`
-- **Endpoints:** `POST https://api.x.ai/v1/videos/generations` + poll `GET /v1/videos/{request_id}`
-- **Modes:** text-to-video, or image-to-video with exactly 1 start frame
-- **Duration:** 1–15 seconds
-- **Rejected flags:** `--end-image`, `--camera-fixed`, `--no-audio`
-- **Seed:** not supported (`SEED=n/a`)
-- **Download immediately:** result URLs expire
-
-### Seedance 1.5 Pro — `seedance2`
-- **Backend:** fal.ai
-- **Endpoints:** `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` / `.../image-to-video`
-- **Strengths:** Broadcast-ready video with synchronized audio (dialogue, foley, music), cinematic camera control, start/end frame conditioning
-- **Cost:** ~$0.26 for 720p 5s with audio (varies by resolution/duration)
-- **Best for:** Short-form drama, music videos, talking-head avatars, product reveals, pre-visualization
-
-## Type Inference
-
-The script automatically determines image vs video mode from the `--model` argument:
-- `flux2`, `nano2`, `gptimage2`, or `grokimage2` → **image** mode
-- `seedvr` or `upscale` → **upscale** mode (still an image output)
-- `seedance2` or `grokvideo` → **video** mode
-
-No `--type` argument needed.
-
-## Choosing a model
-
-| Goal | Model |
-|------|--------|
-| Default quality, cheap iterations | `flux2` |
-| Text in image / hard composition / spatial edits | `nano2` |
-| GPT Image 2 via ChatGPT auth (no fal charge) | `gptimage2` |
-| Grok Imagine image via xAI | `grokimage2` |
-| Upscale an existing image (opt-in) | `seedvr` (alias `upscale`) |
-| Video (default fal) | `seedance2` |
-| Grok Imagine video via xAI | `grokvideo` |
-
-Keep fal as default while credits remain; pick `gptimage2` / `grokimage2` / `grokvideo` explicitly when desired.
-
-## Output Parsing
-
-### Success (exit 0)
-```
-FILENAME=20260417_090400_flux2.png PROMPT=a cute puppy SEED=12345
-FILENAME=20260718_233100_gptimage2_low.png PROMPT=a green frog SEED=n/a
-FILENAME=20260817_120000_grokimage2_low.png PROMPT=a blue square SEED=n/a
-FILENAME=20260914_142000_seedvr_upscale.png PROMPT=upscale SEED=7
-FILENAME=20260417_090400_seedance2.mp4 PROMPT=a bouncing ball SEED=12345
-FILENAME=20260417_090400_seedance2_i2v.mp4 PROMPT=the ball bounces SEED=12345
-FILENAME=20260817_120100_grokvideo.mp4 PROMPT=a bouncing ball SEED=n/a
-```
-
-### Error (exit 1)
-```
-ERROR=Timeout after 300s. Try again or use a different model.
-ERROR=No ChatGPT/Codex OAuth credentials. Run: hermes auth add openai-codex --no-browser
-ERROR=No xAI credentials. Run: hermes auth add xai-oauth --type oauth (or set XAI_API_KEY). Use Hermes venv Python.
-```
-
-## Response Format
-
-### Image
-```
-✅ Image generated
-File: <filename>.png
-Prompt: <prompt used>
-Model: <model>
-Seed: <seed>
-[embed image using MEDIA:~/.hermes/workspace/mediagen/images/raw/<filename>]
-```
-
-### Upscale
-```
-✅ Image upscaled
-File: <filename>.png
-Model: seedvr
-Factor: <Nx>  (or Target: 2160p)
-Seed: <seed>
-[embed image using MEDIA:~/.hermes/workspace/mediagen/images/raw/<filename>]
-```
-
-### Video
-```
-✅ Video generated
-File: <filename>.mp4
-Prompt: <prompt used>
-Model: <model>
-Seed: <seed>
-Duration: <duration>s | Resolution: <resolution> | Audio: <yes|no>
-[send video using MEDIA:~/.hermes/workspace/mediagen/videos/raw/<filename>]
-```
-
-## File Structure
-
-All outputs go to `~/.hermes/workspace/mediagen/`:
-
-```
-images/
-  raw/           → Generated PNG files
-  <base>.md      → One markdown file per image (embed + metadata; legacy local only)
-videos/
-  raw/           → Generated MP4 files
-  <base>.md      → One markdown file per video (link + metadata; legacy local only)
-external/        → Copies of user-provided input images
-logs/            → Structured JSON logs per generation
-receipts/        → Durable Media sync receipts (when Media API is configured)
-```
-
-Legacy `.md` sidecars are still written for local browsing compatibility. They are **never** uploaded to Hostkit Media as canonical assets.
-
-### Optional Hostkit Media sync
-
-After a successful generation (binary + JSON log on disk), mediagen may sync assets to Hostkit Media:
-
-1. Create a local receipt under `receipts/`
-2. Attempt one upload + generation-run POST (timeout `MEDIA_UPLOAD_TIMEOUT_SECONDS`, default 180)
-3. Always print the Telegram/Hermes contract on the last stdout line:
-   `FILENAME=<file> PROMPT=<prompt> SEED=<seed>`
-
-Media failures do **not** change generation exit code `0`. Missing Media config is a no-op (local generation/Telegram unchanged).
-
-```text
-MEDIA_API_URL=https://media.example.dev
-MEDIA_API_TOKEN_FILE=~/.hermes/secrets/media-api-token
-MEDIA_UPLOAD_TIMEOUT_SECONDS=180
-```
-
-Role mapping on generation-run inputs:
-
-- image edit: each `--inputs` path → `edit_source` by position
-- image upscale: `--inputs` → `upscale_source`
-- image-to-video: first `--inputs` → `start_frame`; `--end-image` → `end_frame`
-
-### Filename Convention
-
-**Images (fal):** `<YYYYMMDD>_<HHMMSS>_<model>[_edit].{png,md,json}`
-**Images (upscale):** `<YYYYMMDD>_<HHMMSS>_seedvr_upscale.{png,md,json}`
-**Images (gptimage2):** `<YYYYMMDD>_<HHMMSS>_gptimage2_<quality>[_edit].{png,md,json}`
-**Images (grokimage2):** `<YYYYMMDD>_<HHMMSS>_grokimage2_<quality>[_edit].{png,md,json}`
-**Videos:** `<YYYYMMDD>_<HHMMSS>_<model>[_i2v].{mp4,md,json}`
-
-Examples:
-- `20260417_090400_flux2.png` (image generate)
-- `20260417_090400_nano2_edit.png` (image edit)
-- `20260718_233100_gptimage2_medium.png` (GPT Image 2 generate)
-- `20260718_233130_gptimage2_low_edit.png` (GPT Image 2 edit)
-- `20260817_120000_grokimage2_low.png` (Grok Imagine generate)
-- `20260817_120030_grokimage2_medium_edit.png` (Grok Imagine edit)
-- `20260914_142000_seedvr_upscale.png` (SeedVR upscale)
-- `20260417_090400_seedance2.mp4` (text-to-video)
-- `20260417_090400_seedance2_i2v.mp4` (image-to-video)
-- `20260817_120100_grokvideo.mp4` (Grok text-to-video)
-- `20260817_120130_grokvideo_i2v.mp4` (Grok image-to-video)
-
-## Tips
-
-- Use `--seed` when you want reproducible results or iterate on a specific image/video (not available on gptimage2 / grokimage2 / grokvideo)
-- Image mode (fal generate/edit) has a 120s internal timeout; gptimage2, grokimage2, seedvr, and video use 300s
-- Grok image/video result URLs expire — the script downloads immediately into the workspace
-- For image edit mode, previously generated images live at `~/.hermes/workspace/mediagen/images/raw/`
-- For image-to-video, previously generated images can be used as start/end frames
-- The script auto-creates directories if they don't exist
-- Safety/censor settings are hardcoded to most permissive where the backend allows it (not overridable)
-- Seedance video generation takes ~30-45s for a 5-second clip — longer for higher resolution/duration
-- For gptimage2 / grokimage2 edits, keep source images under 25MB and use PNG/JPEG/GIF/WebP
-
-## Video Prompting Guide
-
-For best results with Seedance, structure prompts like a professional shot description:
-
-| Element | Example |
-|---------|---------|
-| **Scene** | "Rainy Tokyo alley at night, neon reflections on wet pavement" |
-| **Action** | "A woman in a trench coat turns and walks toward camera" |
-| **Dialogue** | `"Wait, I forgot something"` (use quotes for speech) |
-| **Camera** | "Slow dolly-in ending on a close-up" |
-| **Audio/Foley** | "Rain on metal, distant traffic, her heels on concrete" |
-
-**Pro tips:**
-- For image-to-video, the start frame already defines the visual scene — focus prompts on **motion** and **sound**
-- Limit clips to one location and 1-2 characters for maximum coherence
-- Use `--camera-fixed` for tripod shots, omit for dynamic camera movement
-- Use `--no-audio` when you only need visuals (saves cost too)
-
-## Pitfalls
-
-- **FAL_KEY not set:** fal models (`flux2`/`nano2`/`seedance2`/`seedvr`) fail without it. The key is stored in the Hermes env file. Ensure `FAL_KEY` is in `env_passthrough` in config.yaml — otherwise it won't reach the terminal shell. After adding to env_passthrough, a new Hermes session is required for it to take effect
-- **gptimage2 auth missing:** needs `hermes auth add openai-codex` and Hermes venv Python so `agent.auxiliary_client` can refresh/read the token
-- **grokimage2/grokvideo auth missing:** needs `hermes auth add xai-oauth --type oauth` (or `XAI_API_KEY`) and Hermes venv Python
-- **Do not change global `image_gen.provider` or `video_gen.provider` for mediagen Grok/GPT** — mediagen talks to the APIs directly
-- **Grok media URLs expire:** never return the remote URL to Telegram; the script always downloads first
-- **grokimage2 `--quality high` is an error** — API only allows `low`/`medium`
-- **grokvideo duration is 1–15s**, not Seedance's 4–12
-- **grokvideo rejects `--end-image`, `--camera-fixed`, `--no-audio`**
-- **Media `seed` is int|null:** Grok logs used to store `"n/a"`. Sync/retry coerce placeholders (`n/a`, `random`, `ignored:…`) to null. Never POST a string seed.
-- **gptimage2 account capability:** if ChatGPT/Codex account has image gen disabled, script returns a clear ERROR and you should fall back to flux2/nano2
-- **fal_client.subscribe() has NO timeout param:** Do NOT pass `timeout=` to `fal_client.subscribe()` — it will raise TypeError. The script uses `signal.SIGALRM` for timeout instead
-- **fal_client.upload() crashes:** Do NOT use `fal_client.upload(file_handle)` — it crashes with `TypeError: object of type '_io.BufferedReader' has no len()`. Always use `fal_client.upload_file(path_string)` which accepts a file path directly
-- **Large input files:** fal_client.upload_file() handles this, but very large images (>10MB) may be slow; gptimage2 hard-caps inputs at 25MB
-- **Edit keeps source aspect unless asked otherwise:** omit `--width`/`--height` on image edit. The script reads the first `--inputs` file. If the user asks for 16:9 / landscape / square / 9:16 / etc., pass **both** flags. Do not omit flags and hope the prompt changes the frame. Grok snaps to a closed list (4:5 → 3:4); GPT Image 2 only has landscape/square/portrait; Flux is closest to the source pixels.
-- **i2v keeps start-frame aspect unless asked otherwise:** omit `--aspect-ratio` on image-to-video. t2v still defaults to 16:9. Explicit `--aspect-ratio 16:9` on a portrait frame is a real request. 4:5 snaps to 3:4.
-- **Nano2 aspect ratio:** The script converts --width/--height to aspect ratio automatically. Non-standard ratios may be rounded
-- **gptimage2 aspect ratio:** free WxH is snapped to landscape/square/portrait fixed sizes (see Models)
-- **Edit mode requires image_urls (fal):** The script uploads local files to fal.ai storage via upload_file() before calling the edit endpoint
-- **gptimage2 edit** embeds local files as data URLs (no fal upload)
-- **Nano2 doesn't return seed:** The nano2 API response has `"seed": null` even when a seed is provided. The script handles this by displaying the user-provided seed or "random". Do not rely on `result["seed"]` being non-null for nano2
-- **"Exhausted balance" can be transient:** fal.ai sometimes returns this error temporarily even with valid balance. If it happens, retry once before assuming the balance is actually empty
-- **FLUX.2 image_size:** Accepts both dict `{"width": N, "height": M}` and enum strings like `"landscape_4_3"`. The script uses dict format. FLUX.2 may adjust to the nearest supported resolution (e.g. 1280×720 → 1280×736)
-- **Native image_generate tool upscaler cost:** The built-in `image_generate` tool may auto-upscale (Clarity today, historically Flux Vision at $0.10/MP). That can cost many times the generation. **mediagen never auto-upscales.** Opt in with `--model seedvr` (~$0.001/MP)
-- **Pricing reference:** FLUX.2 dev $0.012/MP (~$0.011 for 1280×720), Nano Banana 2 ~$0.05/image, Seedance 1.5 Pro ~$0.26 per 720p 5s video with audio, SeedVR2 upscale $0.001/MP output; gptimage2 uses ChatGPT subscription quotas (not fal credits)
-- **gptimage2 / grokimage2 are not upscalers:** no SR endpoint. Edit at a larger size redraws the scene
-- **SeedVR response shape:** `result["image"]["url"]` (singular `image`, not `images[]`)
-- **Seedance API param names:** Use `enable_audio` (not `generate_audio`), `static_video` (not `camera_fixed`). The script maps CLI flags to correct API names
-- **Seedance video response:** Both text-to-video and image-to-video return `result["video"]["url"]` (same schema)
-- **Seedance duration:** Must be 4-12 seconds. The script validates this
-- **Seedance audio content checker is stricter than visual:** The `enable_safety_checker: False` flag only disables the **visual** post-generation filter. There is a separate **server-side content policy checker** that runs before/during generation and cannot be disabled. This checker is significantly more restrictive when `enable_audio=True` — combinations of input images (e.g. painted bodies, partial nudity) + action prompts (e.g. diving, jumping) + audio generation will be blocked, while the same image + prompt without audio passes fine. If you hit `content_policy_violation` with audio, retry with `--no-audio` — it often resolves the block
-- **Seedance image-to-video:** Requires exactly 1 input image (`--inputs`). Optional end frame via `--end-image`. End frame without start frame is an error
-- **Seedance content policy: audio pipeline is stricter than visual-only:** `enable_safety_checker: False` only disables the visual *post-generation* filter. There is a separate server-side content policy *pre-check* that runs during generation and is NOT controllable. The audio pipeline (`generate_audio: True`) has a significantly more restrictive checker — the same image + prompt can pass without audio but fail with audio. If you get `content_policy_violation` with Seedance + audio, retry with `--no-audio`. Workaround: generate video without audio, then add audio in post if needed.
-- **Cross-model arg validation:** The script rejects incompatible args (e.g. `--camera-fixed` with `flux2`, `--enable-web-search` with `seedance2` / `gptimage2`, `--quality` with fal models)
-- **Subagent with cheaper LLM not worth it:** For mediagen the LLM cost is negligible (~$0.001 per interaction) vs generation cost ($0.01-0.26). A subagent adds overhead, complexity, and may produce worse prompts
-- **Skill category affects directory paths:** When creating skills with a category (e.g. 'media'), the directory becomes ~/.hermes/skills/<category>/<skill-name>/ — all paths in SKILL.md must include the category subdirectory or scripts won't be found
-- **FLUX.2 edit mode preserves original composition:** When the edit instruction requires a radical change in camera angle or perspective (e.g. "show the scene from the opposite side"), FLUX.2 edit tends to re-render the same viewpoint with minor tweaks, ignoring the perspective change. **Use Nano Banana 2 (`nano2`) instead** — its multimodal reasoning understands spatial/compositional changes and correctly reinterprets the scene from a new angle. Example: "view from the opposite side of the pool" failed 3× with FLUX.2 edit (same back-view every time) but succeeded on first try with nano2 edit (correct front-facing view).
+- `references/gptimage2-codex.md`: Codex tool selection, auth, verification and quality
+- `references/grok-imagine-xai.md`: xAI OAuth, billing opt-in, image/video behavior
+- `references/seedvr-upscale.md`: upscaler schema and CLI
+- `docs/FUTURE.md`: out-of-scope features; not proof a feature is implemented

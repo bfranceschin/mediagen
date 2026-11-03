@@ -942,8 +942,8 @@ class TestModelRouting:
     def test_gptimage2_endpoints(self):
         assert "generate" in mediagen.MODEL_MAP["gptimage2"]
         assert "edit" in mediagen.MODEL_MAP["gptimage2"]
-        assert mediagen.MODEL_MAP["gptimage2"]["generate"] == "openai-codex/gpt-image-2"
-        assert mediagen.MODEL_MAP["gptimage2"]["edit"] == "openai-codex/gpt-image-2/edit"
+        assert mediagen.MODEL_MAP["gptimage2"]["generate"] == f"openai-codex/{mediagen.GPT_IMAGE_API_MODEL}"
+        assert mediagen.MODEL_MAP["gptimage2"]["edit"] == f"openai-codex/{mediagen.GPT_IMAGE_API_MODEL}/edit"
 
     def test_grokimage2_endpoints(self):
         assert mediagen.MODEL_MAP["grokimage2"]["generate"] == "https://api.x.ai/v1/images/generations"
@@ -1045,7 +1045,7 @@ class TestXaiProviderAndParse:
         monkeypatch.setenv("XAI_API_KEY", "env-key")
         monkeypatch.setattr(mediagen, "_try_xai_http_credentials", lambda: None)
         monkeypatch.setattr(mediagen, "_try_xai_oauth_runtime_credentials", lambda: None)
-        creds = mediagen.resolve_xai_credentials()
+        creds = mediagen.resolve_xai_credentials(allow_api_key=True)
         assert creds["provider"] == "xai"
         assert creds["api_key"] == "env-key"
         assert creds["base_url"] == "https://api.x.ai/v1"
@@ -1062,7 +1062,7 @@ class TestXaiProviderAndParse:
         monkeypatch.setattr(
             mediagen,
             "resolve_xai_credentials",
-            lambda: {"provider": "xai-oauth", "api_key": "tok", "base_url": "https://api.x.ai/v1"},
+            lambda **kwargs: {"provider": "xai-oauth", "api_key": "tok", "base_url": "https://api.x.ai/v1"},
         )
 
         def fake_post(url, payload, creds, timeout):

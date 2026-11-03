@@ -100,7 +100,8 @@ HERMES_AGENT_DIR = Path(
     os.environ.get("HERMES_AGENT_DIR", str(HERMES_HOME / "hermes-agent"))
 ).expanduser()
 
-FAL_IMAGE_MODELS = {"flux2", "nano2"}
+NANO_MODELS = {"nano2", "nano21"}
+FAL_IMAGE_MODELS = {"flux2"} | NANO_MODELS
 CODEX_IMAGE_MODELS = {"gptimage2"}
 XAI_IMAGE_MODELS = {"grokimage2"}
 UPSCALE_MODEL_ALIASES = {"upscale": "seedvr"}
@@ -114,7 +115,10 @@ SEEDANCE_ASPECT_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto"}
 GROK_VIDEO_ASPECT_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
 VALID_RESOLUTIONS = {"480p", "720p", "1080p"}
 SEEDVR_TARGET_RESOLUTIONS = {"1080p", "1440p", "2160p"}
-CLI_RESOLUTIONS = VALID_RESOLUTIONS | SEEDVR_TARGET_RESOLUTIONS
+NANO_RESOLUTIONS = {"1K", "2K", "4K"}
+NANO_THINKING_LEVELS = {"minimal", "medium", "high"}
+NANO_ASPECT_RATIOS = {"21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "4:1", "1:4", "8:1", "1:8"}
+CLI_RESOLUTIONS = VALID_RESOLUTIONS | SEEDVR_TARGET_RESOLUTIONS | NANO_RESOLUTIONS
 SEEDVR_ENDPOINT = "fal-ai/seedvr/upscale/image"
 SEEDVR_DEFAULT_FACTOR = 2
 SEEDVR_FACTOR_MIN = 1
@@ -123,8 +127,12 @@ DEFAULT_IMAGE_WIDTH = 1280
 DEFAULT_IMAGE_HEIGHT = 720
 DEFAULT_VIDEO_ASPECT = "16:9"
 VALID_GPT_QUALITIES = {"low", "medium", "high"}
+VALID_GPT25_QUALITIES = VALID_GPT_QUALITIES | {"xhigh", "max"}
+GPT_IMAGE_API_MODELS = {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
 VALID_GROK_QUALITIES = {"low", "medium"}
 GROK_MAX_REFERENCE_IMAGES = 3
+
+GPT_IMAGE_API_MODEL = os.environ.get("MEDIAGEN_GPT_IMAGE_MODEL", "gpt-image-2.5-sunburst")
 
 MODEL_MAP = {
     "flux2": {
@@ -132,12 +140,16 @@ MODEL_MAP = {
         "edit": "fal-ai/flux-2/edit",
     },
     "nano2": {
-        "generate": "fal-ai/nano-banana-2",
-        "edit": "fal-ai/nano-banana-2/edit",
+        "generate": "google/nano-banana-2.1",
+        "edit": "google/nano-banana-2.1/edit",
+    },
+    "nano21": {
+        "generate": "google/nano-banana-2.1",
+        "edit": "google/nano-banana-2.1/edit",
     },
     "gptimage2": {
-        "generate": "openai-codex/gpt-image-2",
-        "edit": "openai-codex/gpt-image-2/edit",
+        "generate": f"openai-codex/{GPT_IMAGE_API_MODEL}",
+        "edit": f"openai-codex/{GPT_IMAGE_API_MODEL}/edit",
     },
     "seedance2": {
         "text-to-video": "fal-ai/bytedance/seedance/v1.5/pro/text-to-video",
@@ -161,11 +173,11 @@ CODEX_IMAGE_TIMEOUT_SECONDS = 300
 UPSCALE_TIMEOUT_SECONDS = 300
 VIDEO_TIMEOUT_SECONDS = 300
 
-# GPT Image 2 via Codex Responses API (mirrors Hermes openai-codex image plugin)
-GPT_IMAGE_API_MODEL = "gpt-image-2"
+# GPT image generation via Codex Responses API; legacy alias retained.
+# The default image tool and host models were verified with this account.
 GROK_IMAGE_API_MODEL = "grok-imagine-image-2.0"
 GROK_VIDEO_API_MODEL = "grok-imagine-video-1.5"
-CODEX_CHAT_MODEL = "gpt-5.5"
+CODEX_CHAT_MODEL = os.environ.get("MEDIAGEN_CODEX_CHAT_MODEL", "gpt-6.1-sol")
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_INSTRUCTIONS = (
     "You are an assistant that must fulfill image generation and image editing "
@@ -631,10 +643,14 @@ def build_flux2_args(args, mode: str) -> dict:
 
 
 def build_nano2_args(args, mode: str) -> dict:
-    """Build fal.ai API arguments for Nano Banana 2 models."""
+    """Nano Banana 2.1 generate/edit schema; explicit resolution and reasoning."""
+    resolution = getattr(args, "resolution", None)
+    thinking = getattr(args, "thinking_level", None)
     api_args = {
         "prompt": args.prompt,
-        "aspect_ratio": width_height_to_aspect_ratio(args.width, args.height),
+        "aspect_ratio": nearest_labeled_aspect(args.width, args.height, NANO_ASPECT_RATIOS),
+        "resolution": resolution if isinstance(resolution, str) and resolution in NANO_RESOLUTIONS else "1K",
+        "thinking_level": thinking if isinstance(thinking, str) else "medium",
         "num_images": 1,
         "output_format": "png",
         "safety_tolerance": "6",  # hardcoded — most permissive
@@ -818,6 +834,19 @@ def _validate_upscale_args(args):
 def validate_args(args):
     """Validate argument combinations and exit with error if invalid."""
     model_key = args.model
+    thinking = getattr(args, "thinking_level", None)
+    if isinstance(thinking, str) and (model_key not in NANO_MODELS or thinking not in NANO_THINKING_LEVELS):
+        print("ERROR=--thinking-level is nano2/nano21 only: minimal|medium|high.")
+        sys.exit(1)
+    selected = getattr(args, "image_model", None)
+    if isinstance(selected, str) and model_key not in CODEX_IMAGE_MODELS:
+        print("ERROR=--image-model is only supported for gptimage2.")
+        sys.exit(1)
+    if model_key in NANO_MODELS:
+        resolution = getattr(args, "resolution", None)
+        if isinstance(resolution, str) and resolution not in NANO_RESOLUTIONS:
+            print("ERROR=--resolution for nano2/nano21 must be 1K, 2K or 4K.")
+            sys.exit(1)
     if is_upscale_model(model_key):
         _validate_upscale_args(args)
         return
@@ -855,7 +884,7 @@ def validate_args(args):
 
     # Video-only args used with image model
     if is_image_model:
-        if hasattr(args, "resolution") and args.resolution != "720p":
+        if model_key not in NANO_MODELS and hasattr(args, "resolution") and args.resolution != "720p":
             print("ERROR=--resolution is not supported for image models. Use --width/--height instead.")
             sys.exit(1)
         if isinstance(getattr(args, "aspect_ratio", None), str):
@@ -882,8 +911,10 @@ def validate_args(args):
 
     # Codex image-specific restrictions
     if is_codex_image:
-        if quality not in VALID_GPT_QUALITIES:
-            print(f"ERROR=--quality must be one of {sorted(VALID_GPT_QUALITIES)}, got '{quality}'.")
+        image_model = resolve_gpt_image_model(args)
+        qualities = VALID_GPT_QUALITIES if image_model == "gpt-image-2" else VALID_GPT25_QUALITIES
+        if quality not in qualities:
+            print(f"ERROR=--quality for {image_model} must be one of {sorted(qualities)}, got '{quality}'.")
             sys.exit(1)
         if args.steps != 28:
             print("ERROR=--steps is not supported for gptimage2.")
@@ -1064,6 +1095,9 @@ def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
         creds = resolve_xai_oauth_runtime_credentials() or {}
     except Exception:
         return None
+    # Fail closed if this helper ever gains its own API-key fallback.
+    if creds.get("provider") != "xai-oauth":
+        return None
     api_key = str(creds.get("api_key") or creds.get("access_token") or "").strip()
     if not api_key:
         return None
@@ -1074,23 +1108,32 @@ def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
     }
 
 
-def resolve_xai_credentials() -> dict:
-    """OAuth first (Hermes helpers), then XAI_API_KEY. Always via Hermes venv."""
+def resolve_xai_credentials(*, allow_api_key: bool = False) -> dict:
+    """OAuth first. Check provenance: shared helper may fall back to an API key."""
+    api_credentials = None
     for loader in (_try_xai_http_credentials, _try_xai_oauth_runtime_credentials):
         creds = loader()
         if creds and creds.get("api_key"):
-            return creds
+            if creds.get("provider") == "xai-oauth":
+                return creds
+            if creds.get("provider") == "xai":
+                api_credentials = creds
+    if not allow_api_key:
+        return {}
+    if api_credentials:
+        return api_credentials
     api_key = str(os.environ.get("XAI_API_KEY") or "").strip()
     base_url = str(os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1").strip().rstrip("/")
     return {"provider": "xai", "api_key": api_key, "base_url": base_url or "https://api.x.ai/v1"}
 
 
-def require_xai_credentials() -> dict:
-    creds = resolve_xai_credentials()
+def require_xai_credentials(*, allow_api_key: bool = False) -> dict:
+    creds = resolve_xai_credentials(allow_api_key=allow_api_key)
     if not creds.get("api_key"):
         print(
-            "ERROR=No xAI credentials. Run: hermes auth add xai-oauth --type oauth "
-            "(or set XAI_API_KEY). Use Hermes venv Python."
+            "ERROR=No xAI OAuth credentials. Run: hermes auth add xai-oauth --type oauth. "
+            "For separately billed API-key usage, set XAI_API_KEY and explicitly pass "
+            "--allow-xai-api-key. Use Hermes venv Python."
         )
         sys.exit(1)
     return creds
@@ -1202,6 +1245,16 @@ def _read_codex_access_token() -> Optional[str]:
     except Exception:
         pass
 
+    # Current Hermes versions moved Codex credential resolution out of auxiliary_client.
+    try:
+        from hermes_cli.auth_codex import resolve_codex_runtime_credentials
+        credentials = resolve_codex_runtime_credentials()
+        token = credentials.get("access_token") or credentials.get("api_key")
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+    except Exception:
+        pass
+
     # Fallback: read auth.json pools directly
     auth_path = HERMES_HOME / "auth.json"
     try:
@@ -1307,12 +1360,22 @@ def _to_input_image_part(path: str) -> Dict[str, str]:
     return {"type": "input_image", "image_url": _local_image_to_data_url(path)}
 
 
+def resolve_gpt_image_model(args=None) -> str:
+    selected = getattr(args, "image_model", None)
+    model = selected if isinstance(selected, str) else GPT_IMAGE_API_MODEL
+    if model not in GPT_IMAGE_API_MODELS:
+        print(f"ERROR=Unsupported GPT image model '{model}'. Choose {sorted(GPT_IMAGE_API_MODELS)}.")
+        sys.exit(1)
+    return model
+
+
 def _build_codex_payload(
     *,
     prompt: str,
     size: str,
     quality: str,
     input_images: Optional[List[Dict[str, str]]] = None,
+    image_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     if input_images:
@@ -1328,7 +1391,7 @@ def _build_codex_payload(
         }],
         "tools": [{
             "type": "image_generation",
-            "model": GPT_IMAGE_API_MODEL,
+            "model": image_model or GPT_IMAGE_API_MODEL,
             "size": size,
             "quality": quality,
             "output_format": "png",
@@ -1419,12 +1482,30 @@ def _is_image_generation_unsupported_error(status_code: int, body: str) -> bool:
     return isinstance(message, str) and message.strip() == _IMAGE_GENERATION_UNSUPPORTED_ERROR
 
 
+def _capture_codex_response_metadata(value: Any, metadata: dict) -> None:
+    """Record only server-reported models, never infer them from our request."""
+    if isinstance(value, dict):
+        if value.get("type") == "image_generation_call" and isinstance(value.get("model"), str):
+            metadata["served_image_model"] = value["model"]
+        response = value.get("response")
+        if isinstance(response, dict) and isinstance(response.get("model"), str):
+            metadata["served_chat_model"] = response["model"]
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                _capture_codex_response_metadata(child, metadata)
+    elif isinstance(value, list):
+        for child in value:
+            _capture_codex_response_metadata(child, metadata)
+
+
 def collect_codex_image_b64(
     *,
     prompt: str,
     size: str,
     quality: str,
     input_images: Optional[List[Dict[str, str]]] = None,
+    image_model: Optional[str] = None,
+    response_metadata: Optional[dict] = None,
 ) -> str:
     try:
         import httpx
@@ -1449,6 +1530,7 @@ def collect_codex_image_b64(
         size=size,
         quality=quality,
         input_images=input_images,
+        image_model=image_model,
     )
     timeout = httpx.Timeout(
         CODEX_IMAGE_TIMEOUT_SECONDS,
@@ -1481,6 +1563,8 @@ def collect_codex_image_b64(
                     )
                     sys.exit(1)
                 for event in _iter_sse_json(response):
+                    if response_metadata is not None:
+                        _capture_codex_response_metadata(event, response_metadata)
                     found = _extract_image_b64(event)
                     if found:
                         image_b64 = found
@@ -1573,8 +1657,9 @@ def _write_image_artifacts(
         params["aspect"] = log_extra["aspect"]
     if "provider" in log_extra:
         params["provider"] = log_extra["provider"]
-    if "resolution" in log_extra:
-        params["resolution"] = log_extra["resolution"]
+    for field in ("resolution", "thinking_level", "api_model", "served_image_model", "served_chat_model", "codex_chat_model"):
+        if field in log_extra:
+            params[field] = log_extra[field]
 
     return {
         "kind": "image",
@@ -1800,7 +1885,7 @@ def run_image_fal(args):
             seed_display=seed_display,
             size_str=size_str,
             input_md_entries=input_md_entries,
-            log_extra={"fal_response": result},
+            log_extra={"fal_response": result, **({"resolution": api_args["resolution"], "thinking_level": api_args["thinking_level"]} if model_key in NANO_MODELS else {})},
         )
     )
 
@@ -1810,7 +1895,8 @@ def run_image_codex(args):
     ensure_dirs(media_type="image")
 
     mode = "edit" if args.inputs else "generate"
-    endpoint = MODEL_MAP["gptimage2"][mode]
+    image_model = resolve_gpt_image_model(args)
+    endpoint = f"openai-codex/{image_model}" + ("/edit" if mode == "edit" else "")
     quality = args.quality
     aspect = width_height_to_gpt_aspect(args.width, args.height)
     size = GPT_SIZES[aspect]
@@ -1827,11 +1913,14 @@ def run_image_codex(args):
                 print(f"ERROR=Invalid image input for gptimage2: {e}")
                 sys.exit(1)
 
+    response_metadata: dict = {}
     b64 = collect_codex_image_b64(
         prompt=args.prompt,
         size=size,
         quality=quality,
         input_images=input_images or None,
+        image_model=image_model,
+        response_metadata=response_metadata,
     )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1863,7 +1952,8 @@ def run_image_codex(args):
             input_md_entries=input_md_entries,
             log_extra={
                 "provider": "openai-codex",
-                "api_model": GPT_IMAGE_API_MODEL,
+                "api_model": image_model,
+                **response_metadata,
                 "quality": quality,
                 "aspect": aspect,
                 "size": size,
@@ -1876,7 +1966,7 @@ def run_image_codex(args):
 def run_image_xai(args):
     """Execute Grok Imagine image generate/edit via xAI HTTP API."""
     ensure_dirs(media_type="image")
-    creds = require_xai_credentials()
+    creds = require_xai_credentials(allow_api_key=getattr(args, "allow_xai_api_key", False) is True)
     mode = "edit" if args.inputs else "generate"
     base_url = creds.get("base_url") or "https://api.x.ai/v1"
     endpoint = f"{base_url}/images/edits" if mode == "edit" else f"{base_url}/images/generations"
@@ -2033,7 +2123,7 @@ def run_image(args):
 def run_video_xai(args):
     """Execute Grok Imagine video t2v/i2v via xAI HTTP API."""
     ensure_dirs(media_type="video")
-    creds = require_xai_credentials()
+    creds = require_xai_credentials(allow_api_key=getattr(args, "allow_xai_api_key", False) is True)
     mode = "image-to-video" if args.inputs else "text-to-video"
     base_url = creds.get("base_url") or "https://api.x.ai/v1"
     endpoint = f"{base_url}/videos/generations"
@@ -2220,12 +2310,18 @@ def main():
     parser.add_argument("--height", type=int, default=None, help="Output height — image only (default: 720 generate, inherit on edit)")
     parser.add_argument("--steps", type=int, default=28, help="Inference steps — flux2 only (default: 28)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random; ignored by gptimage2 and grok)")
-    parser.add_argument("--enable-web-search", action="store_true", help="Enable web search — nano2 only")
+    parser.add_argument("--enable-web-search", action="store_true", help="Enable web search — nano2/nano21 only")
+    parser.add_argument("--image-model", choices=sorted(GPT_IMAGE_API_MODELS), default=None,
+                        help="GPT tool model (default MEDIAGEN_GPT_IMAGE_MODEL or gpt-image-2.5-sunburst); gptimage2 alias retained")
+    parser.add_argument("--thinking-level", choices=sorted(NANO_THINKING_LEVELS), default=None,
+                        help="Nano Banana 2.1 reasoning (default medium)")
+    parser.add_argument("--allow-xai-api-key", action="store_true",
+                        help="Allow separately billed xAI API-key fallback; OAuth is still preferred")
     parser.add_argument(
         "--quality",
         default="medium",
-        choices=sorted(VALID_GPT_QUALITIES),
-        help="Image quality — gptimage2: low|medium|high; grokimage2: low|medium (default: medium)",
+        choices=sorted(VALID_GPT25_QUALITIES),
+        help="GPT low|medium|high (+ xhigh|max for 2.5 only); Grok low|medium (default medium)",
     )
     parser.add_argument(
         "--upscale-factor",
@@ -2238,9 +2334,9 @@ def main():
     parser.add_argument("--end-image", default=None, help="End frame image — seedance2 image-to-video only")
     parser.add_argument(
         "--resolution",
-        default="720p",
+        default=None,
         choices=sorted(CLI_RESOLUTIONS),
-        help="Video resolution, or SeedVR target (1080p/1440p/2160p)",
+        help="Nano 1K|2K|4K (default 1K); video 480p|720p|1080p; SeedVR 1080p|1440p|2160p",
     )
     parser.add_argument("--aspect-ratio", default=None, choices=sorted(VALID_ASPECT_RATIOS), help="Video aspect ratio (default: 16:9 t2v, inherit on i2v)")
     parser.add_argument("--duration", type=int, default=5, help="Video duration in seconds (seedance 4-12, grokvideo 1-15; default: 5)")
@@ -2248,6 +2344,8 @@ def main():
     parser.add_argument("--no-audio", action="store_true", help="Disable audio generation — video only")
 
     args = parser.parse_args()
+    if args.resolution is None:
+        args.resolution = "1K" if args.model in NANO_MODELS else "720p"
 
     # Validate argument combinations
     validate_args(args)
