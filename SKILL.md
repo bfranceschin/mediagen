@@ -20,11 +20,23 @@ Use this skill for image/video generation, editing and upscaling unless the user
 
 ```bash
 PYTHON=~/.hermes/hermes-agent/venv/bin/python
-SCRIPT=~/.hermes/skills/media/mediagen/scripts/mediagen.py
+SCRIPT="${HERMES_HOME:-$HOME/.hermes}/skills/media/mediagen/scripts/mediagen.py"
 $PYTHON $SCRIPT --help
 ```
 
 Always use Hermes venv (auth helpers, httpx, fal_client). CLI `--model` is explicit; selection policy above guides the agent, not an automatic cross-provider fallback.
+
+Keep `HERMES_HOME` pointed at the active credential profile. This profile's script locates the source checkout independently: explicit `HERMES_AGENT_DIR`, profile-local checkout, named profile's base checkout, `~/.hermes/hermes-agent`, installed `hermes_cli`, then venv-adjacent locations. Ordinary named-profile use needs no `HERMES_AGENT_DIR` override and works outside the checkout. An explicit override is authoritative; fix an invalid override rather than changing credential homes. Missing code or xAI helper imports now report a code/import error instead of falsely claiming that OAuth credentials are missing. Other runtime credential errors retain existing handling.
+
+For a read-only regression check (no image/video generation or paid fallback), run outside the checkout:
+
+```bash
+env -u HERMES_AGENT_DIR -u PYTHONPATH \
+  HERMES_HOME="$HOME/.hermes/profiles/media-maker" MEDIAGEN_TEST_LIVE=1 \
+  "$PYTHON" -I -B "${SCRIPT%/*}/test_mediagen_auth_paths.py"
+```
+
+The opt-in live test checks `xai-oauth`, preserved credential home and authenticated `GET /models` status 200, without printing tokens. Without `MEDIAGEN_TEST_LIVE=1`, tests are offline. A successful models request verifies authentication, not media-generation quota or model entitlement. Diagnose import failures before requesting re-authentication; never silently switch to API-key billing.
 
 ## Common commands
 

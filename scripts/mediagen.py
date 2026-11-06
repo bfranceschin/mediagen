@@ -96,9 +96,39 @@ EXTERNAL_DIR = WORKSPACE / "external"
 LOGS_DIR = WORKSPACE / "logs"
 
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))).expanduser()
-HERMES_AGENT_DIR = Path(
-    os.environ.get("HERMES_AGENT_DIR", str(HERMES_HOME / "hermes-agent"))
-).expanduser()
+
+
+def _resolve_hermes_agent_dir() -> Path:
+    """Locate code independently of HERMES_HOME (the credential profile).
+
+    Keep explicit overrides authoritative. Named profiles usually share the base
+    installation; never change HERMES_HOME to make its Python imports work.
+    """
+    override = os.environ.get("HERMES_AGENT_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    candidates = [HERMES_HOME / "hermes-agent"]
+    if HERMES_HOME.parent.name == "profiles":
+        candidates.append(HERMES_HOME.parent.parent / "hermes-agent")
+    candidates.append(Path.home() / ".hermes" / "hermes-agent")
+
+    # Support packaged/editable installs and venvs outside the conventional home.
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("hermes_cli")
+        if spec and spec.origin:
+            candidates.append(Path(spec.origin).resolve().parent.parent)
+    except (ImportError, ValueError):
+        pass
+    candidates.extend([Path(sys.prefix).parent / "workspace", Path(sys.prefix).parent])
+    for candidate in candidates:
+        if (candidate / "hermes_cli" / "__init__.py").is_file():
+            return candidate
+    return candidates[0]  # _ensure_hermes_on_path emits an actionable error.
+
+
+HERMES_AGENT_DIR = _resolve_hermes_agent_dir()
 
 NANO_MODELS = {"nano2", "nano21"}
 FAL_IMAGE_MODELS = {"flux2"} | NANO_MODELS
@@ -228,7 +258,7 @@ def require_fal_client():
     except ImportError:
         print(
             "ERROR=fal_client not installed. Use Hermes venv: "
-            f"{HERMES_HOME}/hermes-agent/venv/bin/python {Path(__file__).resolve()}"
+            f"{HERMES_AGENT_DIR}/venv/bin/python {Path(__file__).resolve()}"
         )
         sys.exit(1)
 
@@ -1075,6 +1105,11 @@ def _try_xai_http_credentials() -> Optional[dict]:
         from tools.xai_http import resolve_xai_http_credentials
 
         creds = resolve_xai_http_credentials() or {}
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Hermes xAI auth helper import failed (module: {exc.name or 'unknown'}). "
+            "Check HERMES_AGENT_DIR and use Hermes venv Python; this is not proof of missing OAuth."
+        ) from None
     except Exception:
         return None
     api_key = str(creds.get("api_key") or "").strip()
@@ -1093,6 +1128,11 @@ def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
         from hermes_cli.auth import resolve_xai_oauth_runtime_credentials
 
         creds = resolve_xai_oauth_runtime_credentials() or {}
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Hermes xAI OAuth helper import failed (module: {exc.name or 'unknown'}). "
+            "Check HERMES_AGENT_DIR and use Hermes venv Python; this is not proof of missing OAuth."
+        ) from None
     except Exception:
         return None
     # Fail closed if this helper ever gains its own API-key fallback.
@@ -1146,7 +1186,7 @@ def _require_httpx():
     except ImportError:
         print(
             "ERROR=httpx not installed. Use Hermes venv: "
-            f"{HERMES_HOME}/hermes-agent/venv/bin/python {Path(__file__).resolve()}"
+            f"{HERMES_AGENT_DIR}/venv/bin/python {Path(__file__).resolve()}"
         )
         sys.exit(1)
 
@@ -1230,7 +1270,13 @@ def download_xai_media(url: str, dest: Path, creds: dict, timeout: float = 120.0
 
 def _ensure_hermes_on_path():
     agent_dir = str(HERMES_AGENT_DIR)
-    if agent_dir not in sys.path and Path(agent_dir).is_dir():
+    if not (HERMES_AGENT_DIR / "hermes_cli" / "__init__.py").is_file():
+        raise RuntimeError(
+            "Hermes source checkout not found. Set HERMES_AGENT_DIR to the shared "
+            "Hermes code directory and use its venv Python; keep HERMES_HOME "
+            "pointed at the credential profile."
+        )
+    if agent_dir not in sys.path:
         sys.path.insert(0, agent_dir)
 
 
@@ -1512,7 +1558,7 @@ def collect_codex_image_b64(
     except ImportError:
         print(
             "ERROR=httpx not installed. Use Hermes venv: "
-            f"{HERMES_HOME}/hermes-agent/venv/bin/python {Path(__file__).resolve()}"
+            f"{HERMES_AGENT_DIR}/venv/bin/python {Path(__file__).resolve()}"
         )
         sys.exit(1)
 
