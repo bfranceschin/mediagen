@@ -2378,7 +2378,8 @@ def run_video(args):
 
 
 def main():
-    all_models = sorted(IMAGE_MODELS | VIDEO_MODELS)
+    import fal_adapter
+    all_models = sorted(IMAGE_MODELS | VIDEO_MODELS | {'fal'} | fal_adapter.WAN_MODELS)
     parser = argparse.ArgumentParser(
         description="mediagen — Image and video generation via fal.ai + ChatGPT Codex OAuth"
     )
@@ -2429,7 +2430,25 @@ def main():
     parser.add_argument("--camera-fixed", action="store_true", help="Lock camera position — video only")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio generation — video only")
 
+    adapter_options = fal_adapter.add_arguments(parser)
     args = parser.parse_args()
+    if args.model == 'fal' or args.model in fal_adapter.WAN_MODELS:
+        allowed = {'--model', '--run-id', '--prompt', '--seed', '--inputs', '--operation',
+                   '--fal-endpoint', '--fal-args', '--fal-kind', '--fal-input-map', '--fal-output-map'}
+        if args.model in fal_adapter.WAN_MODELS:
+            allowed = {'--model', '--run-id', '--prompt', '--seed', '--inputs',
+                       '--duration', '--resolution', '--no-audio', '--negative-prompt',
+                       '--no-prompt-expansion', '--multi-shots'}
+        for option in sys.argv[1:]:
+            if option.startswith('--') and option.split('=', 1)[0] not in allowed:
+                parser.error('unsupported control for selected adapter: ' + option.split('=', 1)[0])
+        try:
+            return fal_adapter.run(args, workspace=WORKSPACE, require_client=require_fal_client)
+        except (ValueError, RuntimeError) as exc:
+            parser.error(str(exc))
+    for option in sys.argv[1:]:
+        if option.split('=', 1)[0] in adapter_options:
+            parser.error('adapter-only control: ' + option.split('=', 1)[0])
     if args.resolution is None:
         args.resolution = "1K" if args.model in NANO_MODELS else "720p"
 

@@ -13,7 +13,7 @@ Use this skill for image/video generation, editing and upscaling unless the user
 1. **Images:** prefer ChatGPT/Codex OAuth (`gptimage2`, upgraded GPT Image 2.5 Sunburst). Grok Image 2.0 (`grokimage2`, SuperGrok OAuth) is the other subscription-backed option.
 2. **Video:** prefer `grokvideo` (Grok Imagine Video 1.5 via SuperGrok OAuth).
 3. Evaluate separately billed fal options only when subscriptions lack quota, required capability, availability, or adequate results. Explain additional spend before falling back. Never silently use an API key instead of OAuth.
-4. Nano Banana is upgraded to **2.1**; FLUX.2 dev and Seedance 1.5 Pro are retained, not replaced. Do not add MiniMax/Wan or change global providers without authorization.
+4. Nano Banana is upgraded to **2.1**; FLUX.2 dev and Seedance 1.5 Pro are retained, not replaced. Wan Flash and generic fal are explicit separately billed opt-ins, never automatic fallbacks. Do not add models or change global providers without authorization.
 5. OAuth authentication identifies the credential route, not a guarantee of unlimited or included usage. Respect actual account entitlements and quota errors.
 
 ## Runtime
@@ -71,6 +71,8 @@ GPT selector: `--image-model gpt-image-2.5-sunburst|gpt-image-2.5-flare|gpt-imag
 | `flux2` | fal / `fal-ai/flux-2` and `/edit` | Paid budget alternative; unchanged |
 | `seedance2` | fal / `fal-ai/bytedance/seedance/v1.5/pro/{text-to-video,image-to-video}` | Paid feature alternative; **not Seedance 2** |
 | `seedvr` / `upscale` | fal / `fal-ai/seedvr/upscale/image` | Opt-in super-resolution |
+| `wan26flash` / `wan2.6flash` / `wan` | fal / `wan/v2.6/image-to-video/flash` | Explicit paid Wan 2.6 Flash i2v only |
+| `fal` | fal / explicit `--fal-endpoint` | Explicit paid generic schema; never infer output fields |
 
 Nano 2.1 bills by tokens, not a fixed per-image tariff. Published fal measurements (short 16:9 prompt, minimal/medium thinking) are ~$0.0396 at 1K and ~$0.0593 at 2K; actual cost varies with prompt, references, search and thinking. Source: https://fal.ai/nano-banana-2.1 . Do not reuse Nano 2's old ~$0.05 estimate.
 
@@ -86,6 +88,42 @@ FLUX.2 dev generation: ~$0.012/MP; edit may bill inputs too. Seedance 1.5 Pro: ~
 - Grok video supports 1–15s; rejects `--end-image`, `--camera-fixed`, `--no-audio` in this CLI. Seedance supports 4–12s, optional end frame and those controls.
 - Seeds work for FLUX/Seedance/SeedVR; GPT and Grok have no seed. Nano may return a null seed: do not treat provided seeds as guaranteed reproducibility.
 - Upscale takes exactly one input. Use factor 1–10 (default 2) or target `--resolution 1080p|1440p|2160p`, not both. GPT/Grok edit-at-larger-size is a redraw, not super-resolution.
+
+## Explicit Wan Flash and generic fal
+
+`--model wan26flash --inputs /path/start.png --prompt "..." --run-id my-run`
+uses only `wan/v2.6/image-to-video/flash`. One readable image, dimensions each
+240–7680; prompt required, max1500; negative prompt max500 (`--negative-prompt`).
+Duration `5|10|15` (string on wire), resolution `720p|1080p`; CLI defaults 5/720p,
+not the provider's 1080p resolution default. Expansion defaults true
+(`--no-prompt-expansion`); `--multi-shots` requires expansion. Audio defaults true
+(`--no-audio`); safety checker always true. Optional integer seed includes zero.
+Reject end-image/camera-fixed/aspect-ratio and unsupported controls before upload.
+No optional audio URL input is exposed. This route is separately billed, never a
+subscription fallback, and has not been live-tested by the offline implementation.
+
+Generic `--model fal` requires endpoint identifier, inline JSON `--fal-args`,
+`--operation`, `--fal-kind image|video`, and nonempty JSON `--fal-output-map`
+(`[{"path":"images.0.url","kind":"image"}]`). Map every local `--inputs` item
+explicitly in order with `--fal-input-map`
+(`[{"input":0,"path":"images.0","role":"edit_source","kind":"image"}]`),
+using existing JSON placeholder locations and executor-supported roles. No path
+overlap, eval, wildcards, magic local-path detection or provider schema inference.
+Dot paths support list indices, including root lists. Multiple mapped outputs
+must match declared kind. Put custom controls in JSON, not built-in flags. Retain
+full generic prompts, request JSON/mappings, explicit endpoint/model and returned
+seed in sanitized metadata; do not impose Wan's prompt limit on other endpoints.
+
+Both routes use persistent inputs and LOCAL callback outputs through the common
+executor/finalizer: one CLI invocation generates, persists and attempts optional
+Media publication. `MEDIAGEN_WORKSPACE` overrides the workspace. Repeat the same
+command/run ID to retry publication without generation or original inputs; uncertain
+provider attempts require manual reconciliation, not replay. Incomplete explicit
+publication retries exit nonzero while retaining the final FILENAME stdout line;
+PUBLICATION/run ID diagnostics go to stderr. Adapter/run-id flags are not available
+on legacy built-ins. CDN downloads are unauthenticated HTTPS only, exact fal.media
+boundary, no redirects/proxy inheritance, bounded time/bytes; never widen this to
+an arbitrary SSRF fetcher or log signed URLs. See README for complete examples.
 
 ## Persistence and delivery
 

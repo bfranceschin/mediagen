@@ -35,6 +35,14 @@ class LocalOutput:
 
 
 @dataclass(frozen=True)
+class GeneratedOutputs:
+    """Optional callback envelope; request identity remains separate from results."""
+    outputs: Sequence[LocalOutput]
+    seed: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class GenerationSpec:
     run_id: str
     operation: str
@@ -140,7 +148,7 @@ def _workspace_path(workspace: Path, path: Path, *, directory: bool = False) -> 
 
 
 def execute_generation(spec: GenerationSpec,
-                       generate: Callable[[GenerationSpec], Sequence[LocalOutput]], *,
+                       generate: Callable[[GenerationSpec], Sequence[LocalOutput] | GeneratedOutputs], *,
                        workspace: Path) -> GenerationResult:
     """Generate once, persist locally, and automatically attempt publication."""
     _validate_spec(spec)
@@ -223,7 +231,17 @@ def execute_generation(spec: GenerationSpec,
             assets.append({'path': rel, 'role': item.role, 'position': position, 'kind': item.kind,
                            'origin': 'external_import', 'show_in_grid': False})
         try:
-            outputs = tuple(generate(replace(spec, inputs=tuple(inputs))))
+            generated = generate(replace(spec, inputs=tuple(inputs)))
+            returned = None
+            if isinstance(generated, GeneratedOutputs):
+                returned = generated
+                if returned.seed is not None and type(returned.seed) is not int:
+                    raise ValueError('returned seed must be an integer or None')
+                if not isinstance(returned.metadata, dict):
+                    raise ValueError('returned metadata must be a dictionary')
+                outputs = tuple(returned.outputs)
+            else:
+                outputs = tuple(generated)
             if not outputs:
                 raise ValueError('callback must return at least one LocalOutput')
             for output in outputs:
@@ -246,6 +264,10 @@ def execute_generation(spec: GenerationSpec,
                            'origin': 'mediagen_generation', 'show_in_grid': True})
             out_refs.append({'path': rel, 'position': position})
         generation = {k: v for k, v in identity.items() if k != 'inputs'}
+        if returned is not None:
+            generation['params'] = {**generation['params'], 'provider_result':
+                                    media_client.sanitize_payload(returned.metadata, token=token)}
+            generation['seed'] = returned.seed
         generation.update(tool='mediagen', status='succeeded', inputs=refs, outputs=out_refs)
         log = {'identity': identity, 'spec_digest': spec_digest, 'assets': assets, 'generation': generation}
         persist_json(log_path, log)

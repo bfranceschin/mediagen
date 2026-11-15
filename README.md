@@ -28,6 +28,8 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | Animating images with start/end frame control | ~$0.26/5s@720p |
 | Grok Imagine Video 1.5 | `grokvideo` | `https://api.x.ai/v1/videos/generations` | Text-to-video and image-to-video (1 start frame); 1–15s | SuperGrok / `XAI_API_KEY` |
+| Wan 2.6 Flash | `wan26flash` / `wan2.6flash` / `wan` | `wan/v2.6/image-to-video/flash` | Explicit image-to-video only | Separately billed fal |
+| Generic fal | `fal` | Explicit `--fal-endpoint` identifier | Explicit request/input/output schema | Separately billed fal |
 
 ## Usage
 
@@ -121,6 +123,84 @@ python3 scripts/mediagen.py \
   --end-image /path/to/end_frame.png \
   --duration 6
 ```
+
+### Wan 2.6 Flash — explicit paid image-to-video
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model wan26flash --run-id my-wan-run \
+  --inputs /path/to/start.png --prompt "The camera slowly approaches the subject" \
+  --duration 5 --resolution 720p --seed 0 --no-audio
+```
+
+Aliases `wan2.6flash` and `wan` select the same Flash endpoint, never a different
+Wan route. This is an explicit separately billed choice, **not** a fallback from
+Grok or another model. Requires `FAL_KEY` and the Hermes venv's `fal_client`.
+
+- Exactly one readable start image; each dimension must be 240–7680 pixels.
+- Required prompt: 1–1500 characters, rejected rather than truncated.
+- `--duration 5|10|15` is sent as a string. `--resolution 720p|1080p`;
+  CLI default is **720p**, intentionally overriding the provider's 1080p default.
+- `--negative-prompt` defaults to empty, maximum 500 characters.
+- Prompt expansion defaults on; `--no-prompt-expansion` disables it.
+  `--multi-shots` defaults off and requires expansion on.
+- Audio defaults on; `--no-audio` disables it. Safety checking is always on.
+- Optional integer `--seed` preserves zero; returned seed and `actual_prompt`
+  are retained in sanitized generation metadata.
+- No end frame, fixed camera or aspect-ratio controls: these and other unsupported
+  controls fail before any provider upload. Optional provider `audio_url` is not exposed.
+
+### Generic fal — explicit schema, no response heuristics
+
+The following endpoint is illustrative, not a verified available model:
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model fal --run-id my-custom-run --fal-endpoint example/model/edit \
+  --operation edit --fal-kind image --inputs /path/to/input.png \
+  --fal-args '{"prompt":"Change the background","seed":0,"images":[null],"strength":0.4}' \
+  --fal-input-map '[{"input":0,"path":"images.0","role":"edit_source","kind":"image"}]' \
+  --fal-output-map '[{"path":"images.0.url","kind":"image"}]'
+```
+
+`--fal-args` is an inline JSON object, not a file path. Duplicate keys and
+non-finite values are rejected. Provider-specific parameters belong in this JSON;
+built-in controls such as `--width`, `--duration` and `--no-audio` are rejected.
+Optional `--prompt`/`--seed` may supply missing top-level JSON fields but cannot
+contradict them. Prompts are not limited to Wan's length in generic mode.
+
+Required `--operation`: `generate`, `edit`, `upscale`, `text-to-video`, or
+`image-to-video`. Input roles follow the common executor contract: no inputs for
+generate/text-to-video; ordered `edit_source` images for edit; one `upscale_source`
+image for upscale; `start_frame` followed optionally by `end_frame` for i2v.
+Every local input must have exactly one ordered mapping (zero-based `input`,
+existing request `path`, `role`, `kind`). Input mapping paths cannot overlap.
+No local paths are automatically detected or uploaded from arbitrary JSON fields.
+
+`--fal-kind image|video` declares the output kind. `--fal-output-map` is a nonempty
+ordered array of `{path,kind}` objects; all kinds must match the declaration.
+Paths use dot-separated object keys and zero-based list indices, including root
+list indices, e.g. `clips.0.media.url` or `0.clip.link`. No eval, bracket syntax,
+wildcards or schema guessing. Multiple mapped outputs are persisted and published
+in order. The explicit endpoint is also the generic model identifier; arguments,
+input/output mappings, returned seed and sanitized provider result are logged.
+
+Both new modes download to temporary local files, then use the common
+`execute_generation` → `media_client` finalizer automatically in the same CLI
+invocation. Downloads attach no provider authentication, disable inherited proxies,
+allow only HTTPS `fal.media` and valid subdomains on port 443, reject redirects,
+and are bounded by 120 seconds/100 MiB per output (300-second overall callback).
+Other CDNs require a separately reviewed adapter change, not an arbitrary URL bypass.
+
+Set `MEDIAGEN_WORKSPACE` to override the persistent workspace. Use `--run-id` to
+repeat the **same command** for publication-only recovery, even after deleting
+original inputs. Existing provider-uncertain intents fail closed, never regenerate.
+Changing request identity conflicts rather than overwriting progress. Newly
+generated local success remains successful if publication is pending; an explicit
+incomplete retry exits 1. Publication state and run ID go to stderr; the final
+stdout line remains `FILENAME=... PROMPT=... SEED=...` (first output only; all
+outputs remain in the log/receipt). `--run-id` and adapter-specific flags are
+rejected for older built-in routes, whose existing finalization remains intact.
 
 ## Arguments
 
