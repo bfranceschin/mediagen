@@ -20,7 +20,7 @@
 
 ## Remaining gates and limits
 
-- Real provider generation/publication is not verified and requires separate authorization, including paid usage.
+- Real provider verification was subsequently authorized: the neutral Wan test generated and automatically published successfully; the previous image was rejected again despite enable_safety_checker=false. See [WAN_SAFETY_POLICY_LIVE_TESTS.md](WAN_SAFETY_POLICY_LIVE_TESTS.md) for exact IDs, read-back/hash checks and remaining limits. Installed policy was subsequently updated to source 86b9303 with its own backup; the release/verification above records the initial installation.
 - Push/merge not performed as part of this offline installation.
 - Automatic worker/backoff and uncertain provider-request recovery remain out of scope.
 - Earlier implementation-test HTTP incident remains remotely unverified; this installation does not establish its remote outcome.
