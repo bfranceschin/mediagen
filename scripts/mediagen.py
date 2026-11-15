@@ -71,10 +71,15 @@ try:
     from media_client import load_config as load_config
     from media_client import sync_if_enabled as sync_if_enabled
     from media_client import coerce_media_seed as coerce_media_seed
+    from media_client import sanitize_error_text as sanitize_media_error
+    from media_client import ReceiptConflictError
 except ImportError:  # pragma: no cover — scripts/ always on path in normal installs
     load_config = None  # type: ignore[assignment]
     sync_if_enabled = None  # type: ignore[assignment]
     coerce_media_seed = None  # type: ignore[assignment]
+    sanitize_media_error = None
+    class ReceiptConflictError(ValueError):
+        pass
 
 
 def _seed_for_media(value: Any) -> Optional[int]:
@@ -414,6 +419,8 @@ def finalize_generation_with_media_sync(meta: dict) -> None:
     filename = meta["filename"]
     prompt = meta["prompt"]
     seed_display = meta["seed_display"]
+    publication = {"status": "disabled", "last_error": None}
+    cfg = None
     try:
         if load_config is not None and sync_if_enabled is not None:
             assets, generation = build_media_sync_payload(
@@ -430,16 +437,37 @@ def finalize_generation_with_media_sync(meta: dict) -> None:
             )
             cfg = load_config()
             if cfg is not None:
-                sync_if_enabled(
+                result = sync_if_enabled(
                     cfg,
                     workspace=WORKSPACE,
                     log_path=workspace_relpath(meta["log_path"]),
                     assets=assets,
                     generation=generation,
                 )
-    except Exception:
-        # Media must never break Telegram/FILENAME contract or generation exit code.
-        pass
+                if result is not None:
+                    publication = {"status": result["status"], "last_error": result.get("last_error")}
+        else:
+            publication = {"status": "config_error", "last_error": "media_client import unavailable; publication not attempted"}
+    except ReceiptConflictError:
+        publication = {"status": "conflict", "last_error": "incompatible publication receipt; original preserved"}
+    except Exception as exc:
+        # Do not claim durable recovery if receipt persistence itself failed.
+        message = "publication finalization failed; check receipt before retry"
+        if sanitize_media_error is not None:
+            message += ": " + sanitize_media_error(
+                str(exc), token=getattr(cfg, "token", None), api_url=getattr(cfg, "api_url", None)
+            )
+        publication = {"status": "pending", "last_error": message}
+    error = publication.get("last_error")
+    if error and sanitize_media_error is not None:
+        publication["last_error"] = sanitize_media_error(
+            str(error), token=getattr(cfg, "token", None), api_url=getattr(cfg, "api_url", None)
+        )
+    meta["publication"] = publication
+    diagnostic = f"PUBLICATION={publication['status']}"
+    if publication.get("last_error"):
+        diagnostic += " " + str(publication["last_error"]).replace("\n", " ").replace("\r", " ")
+    print(diagnostic, file=sys.stderr)
     print(f"FILENAME={filename} PROMPT={prompt} SEED={seed_display}")
 
 

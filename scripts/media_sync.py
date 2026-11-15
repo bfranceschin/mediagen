@@ -208,7 +208,7 @@ def _sanitize_retry_error(text: str, *, cfg: Any = None) -> str:
             if token_file:
                 try:
                     token = Path(token_file).expanduser().read_text(encoding="utf-8").strip() or None
-                except OSError:
+                except (OSError, UnicodeError):
                     token = None
     if not api_url:
         api_url = (os.environ.get("MEDIA_API_URL") or "").strip() or None
@@ -224,7 +224,7 @@ def require_workspace(workspace: Path | str) -> Path:
 
 
 def cmd_retry(*, workspace: Path | str) -> dict[str, Any]:
-    """Retry only receipts with status pending. completed/conflict/failed are no-ops."""
+    """Retry pending/config_error receipts; completed/conflict/failed are no-ops."""
     workspace = require_workspace(workspace)
     cfg = load_config()
     receipts_dir = default_receipts_dir(workspace)
@@ -252,7 +252,7 @@ def cmd_retry(*, workspace: Path | str) -> dict[str, Any]:
             + (
                 [
                     _sanitize_retry_error(
-                        "media sync disabled (missing MEDIA_API_URL/token)", cfg=cfg
+                        f"publication {cfg.publication_status}: {cfg.config_error or 'not configured'}", cfg=cfg
                     )
                 ]
                 if skipped
@@ -269,13 +269,13 @@ def cmd_retry(*, workspace: Path | str) -> dict[str, Any]:
             continue
 
         status = receipt.get("status")
-        if status != "pending":
+        if status not in ("pending", "config_error"):
             skipped += 1
             continue
 
         generation = rebuild_generation(workspace, receipt)
         try:
-            sync_receipt(
+            result = sync_receipt(
                 cfg,
                 receipt=receipt,
                 workspace=workspace,
@@ -283,6 +283,10 @@ def cmd_retry(*, workspace: Path | str) -> dict[str, Any]:
                 receipts_dir=receipts_dir,
             )
             retried += 1
+            if result.get("status") != "completed":
+                errors.append(_sanitize_retry_error(
+                    f"{path.name}: publication {result.get('status')}: {result.get('last_error') or 'not completed'}", cfg=cfg
+                ))
         except Exception as exc:  # noqa: BLE001 — keep going across receipts
             errors.append(_sanitize_retry_error(f"{path.name}: {exc}", cfg=cfg))
             retried += 1  # attempt counted even if raised unexpectedly
@@ -474,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_retry = sub.add_parser("retry", help="Retry receipts with status=pending only")
+    p_retry = sub.add_parser("retry", help="Retry receipts with status=pending or config_error")
     p_retry.add_argument(
         "--workspace",
         type=str,

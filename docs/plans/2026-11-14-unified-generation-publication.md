@@ -61,6 +61,6 @@ Use /home/bfranceschin/.hermes/hermes-agent/venv/bin/python. Set PYTHONDONTWRITE
 
 - Discovery complete: installed coder/media-maker scripts identical; checkout behind installed behavior. media_client/media_sync identical in all copies. Existing publication tests: 53 passed offline on installed reference.
 - Reconciliation: complete. Controller verified 329 offline tests; independent SPEC and quality/security re-review PASS after narrow xAI download-credential and helper fallback fixes. Isolated auth paths: 9 passed, 1 live skipped; reviewer also passed 8 additional offline redirect probes. No installation or live provider calls.
-- Executor/receipts: pending.
+- Executor/receipts: Task2 complete; controller verified 523 offline tests, independent SPEC and quality/security re-reviews PASS after sanitizer/config/retry fixes. Payload persistence, recovery, progress and stdout contracts verified with local HTTP simulations. Common executor not started; no installation/live uploads.
 - Wan/generic: pending.
 - Final verification: pending.

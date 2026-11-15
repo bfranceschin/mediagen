@@ -12,8 +12,8 @@ import pytest
 import media_client
 
 
-class TestMissingConfigDisablesSync:
-    def test_missing_media_api_url_disables_sync_without_error(self, tmp_path):
+class TestBrokenConfigIsRecoverable:
+    def test_missing_media_api_url_persists_configuration_error(self, tmp_path):
         env = {
             "MEDIA_API_TOKEN_FILE": str(tmp_path / "token"),
         }
@@ -29,9 +29,9 @@ class TestMissingConfigDisablesSync:
             assets=[{"path": "images/raw/example.png", "kind": "image"}],
             generation={"operation": "generate", "provider": "fal", "model": "flux2"},
         )
-        assert result is None
+        assert result["status"] == "config_error"
 
-    def test_missing_token_file_disables_sync_without_error(self, tmp_path):
+    def test_missing_token_file_persists_configuration_error(self, tmp_path):
         env = {
             "MEDIA_API_URL": "https://media.example.test",
             "MEDIA_API_TOKEN_FILE": str(tmp_path / "missing-token"),
@@ -39,13 +39,14 @@ class TestMissingConfigDisablesSync:
         cfg = media_client.load_config(env)
         assert cfg.enabled is False
         assert cfg.token is None
-        assert media_client.sync_if_enabled(
+        result = media_client.sync_if_enabled(
             cfg,
             workspace=tmp_path,
             log_path="logs/example.json",
             assets=[],
             generation={},
-        ) is None
+        )
+        assert result["status"] == "config_error"
 
 
 class TestTokenFromFileNeverPersisted:
