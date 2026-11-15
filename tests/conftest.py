@@ -6,6 +6,25 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent))
+from offline_guard import clear_live_environment, install
+
+# Install before collection imports mediagen's environment-derived defaults.
+# Keep this patch alive until pytest exits; per-test monkeypatch restores to it.
+_session_offline = pytest.MonkeyPatch()
+install(_session_offline)
+
+
+@pytest.fixture(autouse=True)
+def offline_suite(monkeypatch):
+    """Clear inherited settings before each test; explicit setenv still works."""
+    clear_live_environment(monkeypatch)
+
+
+def pytest_unconfigure(config):
+    _session_offline.undo()
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "integration: paid API generation (disabled locally)")
 

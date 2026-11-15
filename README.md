@@ -28,6 +28,8 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | Animating images with start/end frame control | ~$0.26/5s@720p |
 | Grok Imagine Video 1.5 | `grokvideo` | `https://api.x.ai/v1/videos/generations` | Text-to-video and image-to-video (1 start frame); 1–15s | SuperGrok / `XAI_API_KEY` |
+| Wan 2.6 Flash | `wan26flash` / `wan2.6flash` / `wan` | `wan/v2.6/image-to-video/flash` | Explicit image-to-video only | Separately billed fal |
+| Generic fal | `fal` | Explicit `--fal-endpoint` identifier | Explicit request/input/output schema | Separately billed fal |
 
 ## Usage
 
@@ -122,15 +124,106 @@ python3 scripts/mediagen.py \
   --duration 6
 ```
 
+### Wan 2.6 Flash — explicit paid image-to-video
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model wan26flash --run-id my-wan-run \
+  --inputs /path/to/start.png --prompt "The camera slowly approaches the subject" \
+  --duration 5 --resolution 720p --seed 0 --no-audio
+```
+
+Aliases `wan2.6flash` and `wan` select the same Flash endpoint, never a different
+Wan route. This is an explicit separately billed choice, **not** a fallback from
+Grok or another model. Requires `FAL_KEY` and the Hermes venv's `fal_client`.
+
+- Exactly one readable start image; each dimension must be 240–7680 pixels.
+- Required prompt: 1–1500 characters, rejected rather than truncated.
+- `--duration 5|10|15` is sent as a string. `--resolution 720p|1080p`;
+  CLI default is **720p**, intentionally overriding the provider's 1080p default.
+- `--negative-prompt` defaults to empty, maximum 500 characters.
+- Prompt expansion defaults on; `--no-prompt-expansion` disables it.
+  `--multi-shots` defaults off and requires expansion on.
+- Audio defaults on; `--no-audio` disables it. The request always hardcodes
+  `enable_safety_checker: false`; no CLI option re-enables this client control.
+- Optional integer `--seed` preserves zero; returned seed and `actual_prompt`
+  are retained in sanitized generation metadata.
+- No end frame, fixed camera or aspect-ratio controls: these and other unsupported
+  controls fail before any provider upload. Optional provider `audio_url` is not exposed.
+
+### Generic fal — explicit schema, no response heuristics
+
+The following endpoint is illustrative, not a verified available model:
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
+  --model fal --run-id my-custom-run --fal-endpoint example/model/edit \
+  --operation edit --fal-kind image --inputs /path/to/input.png \
+  --fal-args '{"prompt":"Change the background","seed":0,"images":[null],"strength":0.4}' \
+  --fal-input-map '[{"input":0,"path":"images.0","role":"edit_source","kind":"image"}]' \
+  --fal-output-map '[{"path":"images.0.url","kind":"image"}]'
+```
+
+`--fal-args` is an inline JSON object, not a file path. Duplicate keys and
+non-finite values are rejected. Provider-specific parameters belong in this JSON;
+built-in controls such as `--width`, `--duration` and `--no-audio` are rejected.
+Optional `--prompt`/`--seed` may supply missing top-level JSON fields but cannot
+contradict them. Prompts are not limited to Wan's length in generic mode.
+
+Client filtering policy: disable supported configurable safety controls, never
+silently enable a known option. For generic fal, include a top-level
+`enable_safety_checker` only when the endpoint schema supports it; if explicitly
+present, it is normalized to `false` before request identity, persistence and
+submission, even when the supplied value is `true`. The adapter does not validate
+endpoint support; input mappings cannot overwrite this top-level control.
+It does not inject it when absent, guess alternative
+keys, or recursively rewrite arbitrary nested data. Check the endpoint's schema
+instead of inventing parameters. This requests client-configurable filtering off;
+it does not guarantee that provider-side moderation is disabled, that the server
+honors the flag, or that the account has the required entitlement.
+
+Required `--operation`: `generate`, `edit`, `upscale`, `text-to-video`, or
+`image-to-video`. Input roles follow the common executor contract: no inputs for
+generate/text-to-video; ordered `edit_source` images for edit; one `upscale_source`
+image for upscale; `start_frame` followed optionally by `end_frame` for i2v.
+Every local input must have exactly one ordered mapping (zero-based `input`,
+existing request `path`, `role`, `kind`). Input mapping paths cannot overlap.
+No local paths are automatically detected or uploaded from arbitrary JSON fields.
+
+`--fal-kind image|video` declares the output kind. `--fal-output-map` is a nonempty
+ordered array of `{path,kind}` objects; all kinds must match the declaration.
+Paths use dot-separated object keys and zero-based list indices, including root
+list indices, e.g. `clips.0.media.url` or `0.clip.link`. No eval, bracket syntax,
+wildcards or schema guessing. Multiple mapped outputs are persisted and published
+in order. The explicit endpoint is also the generic model identifier; arguments,
+input/output mappings, returned seed and sanitized provider result are logged.
+
+Both new modes download to temporary local files, then use the common
+`execute_generation` → `media_client` finalizer automatically in the same CLI
+invocation. Downloads attach no provider authentication, disable inherited proxies,
+allow only HTTPS `fal.media` and valid subdomains on port 443, reject redirects,
+and are bounded by 120 seconds/100 MiB per output (300-second overall callback).
+Other CDNs require a separately reviewed adapter change, not an arbitrary URL bypass.
+
+Set `MEDIAGEN_WORKSPACE` to override the persistent workspace. Use `--run-id` to
+repeat the **same command** for publication-only recovery, even after deleting
+original inputs. Existing provider-uncertain intents fail closed, never regenerate.
+Changing request identity conflicts rather than overwriting progress. Newly
+generated local success remains successful if publication is pending; an explicit
+incomplete retry exits 1. Publication state and run ID go to stderr; the final
+stdout line remains `FILENAME=... PROMPT=... SEED=...` (first output only; all
+outputs remain in the log/receipt). `--run-id` and adapter-specific flags are
+rejected for older built-in routes, whose existing finalization remains intact.
+
 ## Arguments
 
 ### Shared
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedance2`, or `grokvideo` |
-| `--prompt` | Yes | — | Text prompt or edit instruction |
-| `--inputs` | No | — | Input images: 1-4 for image edit, exactly 1 for video |
+| `--model` | Yes | — | `flux2`, `nano2`/`nano21`, `gptimage2`, `grokimage2`, `seedance2`, `grokvideo`, `seedvr`/`upscale`, `wan26flash`/`wan2.6flash`/`wan`, or `fal` |
+| `--prompt` | Model-dependent | — | Text prompt/edit instruction; optional for upscale or supplied in generic fal JSON |
+| `--inputs` | Model-dependent | — | Image edit/upscale/frame inputs; Wan requires exactly one image; generic fal uses explicit input bindings |
 | `--seed` | No | random | Reproducibility seed |
 
 ### Image-only
@@ -149,15 +242,15 @@ python3 scripts/mediagen.py \
 | `--end-image` | — | End frame image (seedance2 i2v only) |
 | `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
 | `--aspect-ratio` | t2v 16:9; i2v inherit | Omit on i2v to match the start frame. Set to force a format. |
-| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
+| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s; Wan 5/10/15s; generic fal uses JSON |
 | `--camera-fixed` | false | Lock camera (seedance2 only) |
-| `--no-audio` | false | Disable audio (seedance2 only) |
+| `--no-audio` | false | Disable audio (seedance2 or Wan); generic fal uses JSON |
 
 ## Requirements
 
 - Python 3.11+
 - `fal_client` (`pip install fal-client`) for fal models
-- `FAL_KEY` for `flux2`/`nano2`/`seedance2`
+- `FAL_KEY` for fal routes: `flux2`, `nano2`/`nano21`, `seedance2`, `seedvr`/`upscale`, Wan and generic `fal`
 - Hermes venv + `hermes auth add openai-codex` for `gptimage2`
 - Hermes venv + `hermes auth add xai-oauth` or `XAI_API_KEY` for `grokimage2`/`grokvideo`
 
@@ -185,7 +278,7 @@ When configured, each successful generation creates a receipt and attempts one M
 FILENAME=<filename> PROMPT=<prompt> SEED=<seed>
 ```
 
-Media outages leave the binary/log/receipt intact and still exit `0`. Missing config disables sync (no error).
+A successful local generation remains successful when publication fails, with `PUBLICATION=<status>` on stderr and local artifacts retained. Omitting both publication settings intentionally disables sync; partial, empty or invalid settings produce `config_error` and a recoverable receipt. Reentering a Wan/generic run solely to retry publication returns nonzero if publication remains incomplete; see [publication receipts](docs/publication-receipts.md).
 
 ```text
 MEDIA_API_URL=https://media.example.dev
@@ -214,11 +307,8 @@ Default is dry-run (no HTTP). `--apply` is opt-in and uses the same `MEDIA_API_U
 # Run unit tests (fast, no API calls, no cost)
 python -m pytest tests/test_unit.py tests/test_media_client.py tests/test_mediagen_media_sync.py -q
 
-# Run integration tests (calls real fal.ai API — costs ~$0.01-0.26)
-python -m pytest tests/test_integration.py -v --run-integration
-
-# Run all tests
-python -m pytest tests/ -v
+# Run the offline suite (global environment cleanup and socket guard)
+python -m pytest tests/ -v --ignore=tests/test_integration.py
 ```
 
 ### Test structure
@@ -231,7 +321,7 @@ python -m pytest tests/ -v
 | `tests/test_media_backfill.py` | Backfill parser/reconciliation (mocked HTTP) | ❌ No | Free |
 | `tests/test_integration.py` | Full pipeline with real API | ✅ Yes | ~$0.01-0.26 |
 
-Integration tests are **skipped by default** — only run when `--run-integration` flag is passed, so you never accidentally spend money.
+Tests marked `integration` are **unconditionally skipped** by the current offline conftest. There is no supported `--run-integration` opt-in in this suite. Live generation/publication requires a separately approved verification procedure; do not weaken the offline guard to run it.
 
 ## License
 

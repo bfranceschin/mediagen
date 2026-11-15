@@ -16,6 +16,14 @@ import media_client
 import mediagen
 
 
+@pytest.fixture(autouse=True)
+def _block_real_http(monkeypatch):
+    # A live-generation opt-out does not disable inherited publisher settings.
+    def forbidden(*args, **kwargs):
+        raise AssertionError('unexpected real HTTP in media sync contract tests')
+    monkeypatch.setattr(media_client.urllib.request, 'urlopen', forbidden)
+
+
 def _png_bytes() -> bytes:
     # Minimal valid-ish PNG header + payload (not decoded by mediagen)
     return b"\x89PNG\r\n\x1a\nfake-png-bytes"
@@ -220,6 +228,56 @@ class TestBuildVideoMediaPayload:
 
 
 class TestFinalizeAfterPersist:
+    def test_builtin_log_uses_shared_sanitized_persistence(self, tmp_path, monkeypatch):
+        import generation_executor
+        monkeypatch.delenv('MEDIA_API_URL', raising=False)
+        monkeypatch.delenv('MEDIA_API_TOKEN_FILE', raising=False)
+        token = tmp_path / 'token'
+        token.write_text('BUILTIN_TOKEN')
+        monkeypatch.setenv('MEDIA_API_URL', 'https://media.test')
+        monkeypatch.setenv('MEDIA_API_TOKEN_FILE', str(token))
+        _setup_workspace(tmp_path)
+        output = mediagen.RAW_DIR / 'sanitized.png'
+        output.write_bytes(_png_bytes())
+        calls = []
+        persist = generation_executor.persist_json
+        def record(path, payload, **kwargs):
+            calls.append(path)
+            return persist(path, payload, **kwargs)
+        monkeypatch.setattr(generation_executor, 'persist_json', record)
+        meta = mediagen._write_image_artifacts(
+            image_path=output, base_name='sanitized', image_filename='sanitized.png',
+            args=_image_args(), mode='generate', endpoint='fal-ai/flux-2',
+            seed_display=0, size_str='1280x720', input_md_entries=[],
+            log_extra={'diagnostic': 'ordinary BUILTIN_TOKEN text', 'fal_response': {'api_key': 'BUILTIN_SECRET', 'images': [
+                {'url': 'https://cdn.test/file?X-Amz-Signature=BUILTIN_SIGNED'}]}})
+        assert calls == [meta['log_path']]
+        assert 'BUILTIN_SECRET' not in meta['log_path'].read_text()
+        assert 'BUILTIN_SIGNED' not in meta['log_path'].read_text()
+        assert 'BUILTIN_TOKEN' not in meta['log_path'].read_text()
+
+    def test_builtin_uses_executor_finalization_boundary(self, tmp_path, monkeypatch, capsys):
+        import generation_executor
+        monkeypatch.delenv('MEDIA_API_URL', raising=False)
+        monkeypatch.delenv('MEDIA_API_TOKEN_FILE', raising=False)
+        _setup_workspace(tmp_path)
+        output = mediagen.RAW_DIR / 'builtin.png'
+        output.write_bytes(_png_bytes())
+        meta = mediagen._write_image_artifacts(
+            image_path=output, base_name='builtin', image_filename='builtin.png',
+            args=_image_args(), mode='generate', endpoint='fal-ai/flux-2',
+            seed_display=0, size_str='1280x720', input_md_entries=[], log_extra={})
+        calls = []
+        def finalize(**kwargs):
+            calls.append(kwargs)
+            return {'status': 'pending', 'last_error': 'offline'}, None
+        monkeypatch.setattr(generation_executor, 'finalize_publication', finalize)
+        mediagen.finalize_generation_with_media_sync(meta)
+        assert len(calls) == 1
+        assert calls[0]['generation']['seed'] == 0
+        assert meta['publication']['status'] == 'pending'
+        assert capsys.readouterr().out.splitlines()[-1] == 'FILENAME=builtin.png PROMPT=a test prompt SEED=0'
+
     def test_media_api_down_preserves_file_log_receipt_stdout_and_no_raise(
         self, tmp_path, monkeypatch, capsys
     ):

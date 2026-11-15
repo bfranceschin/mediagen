@@ -62,6 +62,7 @@ import struct
 import sys
 import time
 import urllib.request
+from urllib.parse import urljoin, urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,10 +71,15 @@ try:
     from media_client import load_config as load_config
     from media_client import sync_if_enabled as sync_if_enabled
     from media_client import coerce_media_seed as coerce_media_seed
+    from media_client import sanitize_error_text as sanitize_media_error
+    from media_client import ReceiptConflictError
 except ImportError:  # pragma: no cover — scripts/ always on path in normal installs
     load_config = None  # type: ignore[assignment]
     sync_if_enabled = None  # type: ignore[assignment]
     coerce_media_seed = None  # type: ignore[assignment]
+    sanitize_media_error = None
+    class ReceiptConflictError(ValueError):
+        pass
 
 
 def _seed_for_media(value: Any) -> Optional[int]:
@@ -413,32 +419,41 @@ def finalize_generation_with_media_sync(meta: dict) -> None:
     filename = meta["filename"]
     prompt = meta["prompt"]
     seed_display = meta["seed_display"]
+    publication = {"status": "disabled", "last_error": None}
+    cfg = None
     try:
         if load_config is not None and sync_if_enabled is not None:
+            import generation_executor
             assets, generation = build_media_sync_payload(
-                kind=meta["kind"],
-                mode=meta["mode"],
-                model=meta["model"],
-                endpoint=meta["endpoint"],
-                prompt=prompt,
-                seed=meta.get("seed"),
+                kind=meta["kind"], mode=meta["mode"], model=meta["model"],
+                endpoint=meta["endpoint"], prompt=prompt, seed=meta.get("seed"),
                 output_path=meta["output_path"],
                 input_md_entries=meta.get("input_md_entries") or [],
-                end_md_entry=meta.get("end_md_entry"),
-                params=meta.get("params"),
+                end_md_entry=meta.get("end_md_entry"), params=meta.get("params"),
             )
-            cfg = load_config()
-            if cfg is not None:
-                sync_if_enabled(
-                    cfg,
-                    workspace=WORKSPACE,
-                    log_path=workspace_relpath(meta["log_path"]),
-                    assets=assets,
-                    generation=generation,
-                )
-    except Exception:
-        # Media must never break Telegram/FILENAME contract or generation exit code.
-        pass
+            publication, receipt_path = generation_executor.finalize_publication(
+                workspace=WORKSPACE, log_path=Path(meta["log_path"]),
+                assets=assets, generation=generation, load_config=load_config,
+                sync=sync_if_enabled,
+            )
+            meta["receipt_path"] = receipt_path
+        else:
+            publication = {"status": "config_error", "last_error": "media_client import unavailable; publication not attempted"}
+    except Exception as exc:
+        message = "publication finalization failed; check receipt before retry"
+        if sanitize_media_error is not None:
+            message += ": " + sanitize_media_error(str(exc))
+        publication = {"status": "pending", "last_error": message}
+    error = publication.get("last_error")
+    if error and sanitize_media_error is not None:
+        publication["last_error"] = sanitize_media_error(
+            str(error), token=getattr(cfg, "token", None), api_url=getattr(cfg, "api_url", None)
+        )
+    meta["publication"] = publication
+    diagnostic = f"PUBLICATION={publication['status']}"
+    if publication.get("last_error"):
+        diagnostic += " " + str(publication["last_error"]).replace("\n", " ").replace("\r", " ")
+    print(diagnostic, file=sys.stderr)
     print(f"FILENAME={filename} PROMPT={prompt} SEED={seed_display}")
 
 
@@ -1106,8 +1121,10 @@ def _try_xai_http_credentials() -> Optional[dict]:
 
         creds = resolve_xai_http_credentials() or {}
     except ImportError as exc:
+        unavailable = isinstance(exc, ModuleNotFoundError) and exc.name in {"tools", "tools.xai_http"}
+        reason = "unavailable" if unavailable else "import failed"
         raise RuntimeError(
-            f"Hermes xAI auth helper import failed (module: {exc.name or 'unknown'}). "
+            f"Hermes xAI auth helper {reason} (module: {exc.name or 'unknown'}). "
             "Check HERMES_AGENT_DIR and use Hermes venv Python; this is not proof of missing OAuth."
         ) from None
     except Exception:
@@ -1129,8 +1146,10 @@ def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
 
         creds = resolve_xai_oauth_runtime_credentials() or {}
     except ImportError as exc:
+        unavailable = isinstance(exc, ModuleNotFoundError) and exc.name in {"hermes_cli", "hermes_cli.auth"}
+        reason = "unavailable" if unavailable else "import failed"
         raise RuntimeError(
-            f"Hermes xAI OAuth helper import failed (module: {exc.name or 'unknown'}). "
+            f"Hermes xAI OAuth helper {reason} (module: {exc.name or 'unknown'}). "
             "Check HERMES_AGENT_DIR and use Hermes venv Python; this is not proof of missing OAuth."
         ) from None
     except Exception:
@@ -1151,20 +1170,29 @@ def _try_xai_oauth_runtime_credentials() -> Optional[dict]:
 def resolve_xai_credentials(*, allow_api_key: bool = False) -> dict:
     """OAuth first. Check provenance: shared helper may fall back to an API key."""
     api_credentials = None
+    loader_errors = []
     for loader in (_try_xai_http_credentials, _try_xai_oauth_runtime_credentials):
-        creds = loader()
+        try:
+            creds = loader()
+        except RuntimeError as exc:
+            loader_errors.append(str(exc))
+            continue
         if creds and creds.get("api_key"):
             if creds.get("provider") == "xai-oauth":
                 return creds
             if creds.get("provider") == "xai":
                 api_credentials = creds
-    if not allow_api_key:
-        return {}
-    if api_credentials:
-        return api_credentials
-    api_key = str(os.environ.get("XAI_API_KEY") or "").strip()
-    base_url = str(os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1").strip().rstrip("/")
-    return {"provider": "xai", "api_key": api_key, "base_url": base_url or "https://api.x.ai/v1"}
+    if allow_api_key:
+        if api_credentials:
+            return api_credentials
+        api_key = str(os.environ.get("XAI_API_KEY") or "").strip()
+        base_url = str(os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1").strip().rstrip("/")
+        api_credentials = {"provider": "xai", "api_key": api_key, "base_url": base_url or "https://api.x.ai/v1"}
+        if api_key:
+            return api_credentials
+    if loader_errors:
+        raise RuntimeError("xAI credential loaders failed: " + "; ".join(loader_errors)) from None
+    return api_credentials if allow_api_key and api_credentials else {}
 
 
 def require_xai_credentials(*, allow_api_key: bool = False) -> dict:
@@ -1252,11 +1280,23 @@ def _xai_get_json(url: str, creds: dict, timeout: float) -> dict:
 
 
 def download_xai_media(url: str, dest: Path, creds: dict, timeout: float = 120.0) -> None:
-    """Download a temporary Imagine URL with the same bearer used for the API."""
+    """Download public media; only the established xAI API origin gets bearer auth."""
     httpx = _require_httpx()
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as http:
-            response = http.get(url, headers=_xai_headers(creds["api_key"]))
+        with httpx.Client(timeout=timeout, follow_redirects=False) as http:
+            for _ in range(21):
+                target = urlsplit(url)
+                if (target.scheme != "https" or not target.hostname
+                        or target.username is not None or target.password is not None):
+                    raise ValueError("Media URL must use absolute HTTPS without userinfo")
+                trusted = target.hostname == "api.x.ai" and target.port in (None, 443)
+                headers = _xai_headers(creds["api_key"]) if trusted else {}
+                response = http.get(url, headers=headers)
+                if response.status_code not in {301, 302, 303, 307, 308}:
+                    break
+                url = urljoin(url, response.headers["location"])
+            else:
+                raise ValueError("Too many media redirects")
             if response.status_code >= 400:
                 print(f"ERROR={_format_xai_http_error(response.status_code, response.text)}")
                 sys.exit(1)
@@ -1687,8 +1727,8 @@ def _write_image_artifacts(
         "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode in {"edit", "upscale"} else [],
         **log_extra,
     }
-    with open(log_path, "w") as f:
-        json.dump(log_data, f, indent=2, default=str)
+    import generation_executor
+    generation_executor.persist_json(log_path, log_data)
 
     model_key = canonical_model(getattr(args, "model", None) or "unknown")
     params: dict[str, Any] = {
@@ -1813,8 +1853,8 @@ Camera fixed: {camera_str}
     else:
         log_data["fal_response"] = result
     log_data.update(extra)
-    with open(log_path, "w") as f:
-        json.dump(log_data, f, indent=2, default=str)
+    import generation_executor
+    generation_executor.persist_json(log_path, log_data)
 
     model_key = getattr(args, "model", None) or "seedance2"
     params = {
@@ -2338,7 +2378,8 @@ def run_video(args):
 
 
 def main():
-    all_models = sorted(IMAGE_MODELS | VIDEO_MODELS)
+    import fal_adapter
+    all_models = sorted(IMAGE_MODELS | VIDEO_MODELS | {'fal'} | fal_adapter.WAN_MODELS)
     parser = argparse.ArgumentParser(
         description="mediagen — Image and video generation via fal.ai + ChatGPT Codex OAuth"
     )
@@ -2389,7 +2430,25 @@ def main():
     parser.add_argument("--camera-fixed", action="store_true", help="Lock camera position — video only")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio generation — video only")
 
+    adapter_options = fal_adapter.add_arguments(parser)
     args = parser.parse_args()
+    if args.model == 'fal' or args.model in fal_adapter.WAN_MODELS:
+        allowed = {'--model', '--run-id', '--prompt', '--seed', '--inputs', '--operation',
+                   '--fal-endpoint', '--fal-args', '--fal-kind', '--fal-input-map', '--fal-output-map'}
+        if args.model in fal_adapter.WAN_MODELS:
+            allowed = {'--model', '--run-id', '--prompt', '--seed', '--inputs',
+                       '--duration', '--resolution', '--no-audio', '--negative-prompt',
+                       '--no-prompt-expansion', '--multi-shots'}
+        for option in sys.argv[1:]:
+            if option.startswith('--') and option.split('=', 1)[0] not in allowed:
+                parser.error('unsupported control for selected adapter: ' + option.split('=', 1)[0])
+        try:
+            return fal_adapter.run(args, workspace=WORKSPACE, require_client=require_fal_client)
+        except (ValueError, RuntimeError) as exc:
+            parser.error(str(exc))
+    for option in sys.argv[1:]:
+        if option.split('=', 1)[0] in adapter_options:
+            parser.error('adapter-only control: ' + option.split('=', 1)[0])
     if args.resolution is None:
         args.resolution = "1K" if args.model in NANO_MODELS else "720p"
 

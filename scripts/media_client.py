@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from urllib.parse import urlsplit
 from urllib.request import Request
 
 
@@ -60,10 +61,18 @@ class MediaConfig:
     token: Optional[str] = None
     timeout_seconds: int = DEFAULT_UPLOAD_TIMEOUT_SECONDS
     receipts_dir: Optional[Path] = None
+    intended: bool = False
+    config_error: Optional[str] = None
+
+    @property
+    def publication_status(self) -> str:
+        if self.enabled:
+            return "pending"
+        return "config_error" if self.intended else "disabled"
 
 
 def load_config(env: Optional[Mapping[str, str]] = None) -> MediaConfig:
-    """Load Media sync config from environment. Missing pieces disable sync."""
+    """Absent integration opts out; incomplete configured integration is recoverable."""
     env = env if env is not None else os.environ
     api_url = (env.get("MEDIA_API_URL") or "").strip().rstrip("/")
     token_file = (env.get("MEDIA_API_TOKEN_FILE") or "").strip()
@@ -75,20 +84,47 @@ def load_config(env: Optional[Mapping[str, str]] = None) -> MediaConfig:
     if timeout_seconds <= 0:
         timeout_seconds = DEFAULT_UPLOAD_TIMEOUT_SECONDS
 
+    intended = "MEDIA_API_URL" in env or "MEDIA_API_TOKEN_FILE" in env
+
+    def invalid(message: str) -> MediaConfig:
+        return MediaConfig(
+            False, api_url=api_url or None, timeout_seconds=timeout_seconds,
+            intended=intended, config_error=message if intended else None,
+        )
+
     if not api_url or not token_file:
-        return MediaConfig(enabled=False, timeout_seconds=timeout_seconds)
+        return invalid("missing MEDIA_API_URL or MEDIA_API_TOKEN_FILE")
+
+    # Validate before reading credentials or attempting HTTP. Never echo unsafe URLs.
+    try:
+        origin = urlsplit(api_url)
+        port = origin.port  # Invalid/out-of-range ports raise ValueError.
+        safe_url = (
+            origin.scheme in {"https", "http"}
+            and bool(origin.hostname)
+            and origin.username is None and origin.password is None
+            and not origin.query and not origin.fragment
+            and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in api_url)
+            and "\\" not in api_url
+            and (origin.scheme == "https" or origin.hostname in {"localhost", "127.0.0.1", "::1"})
+            and (port is None or port > 0)
+        )
+    except ValueError:
+        safe_url = False
+    if not safe_url:
+        return invalid("MEDIA_API_URL must be an HTTPS base URL (HTTP allowed on loopback), without credentials, query or fragment")
 
     path = Path(os.path.expanduser(token_file))
     if not path.is_file():
-        return MediaConfig(enabled=False, api_url=api_url, timeout_seconds=timeout_seconds)
+        return invalid("MEDIA_API_TOKEN_FILE is missing, unreadable or empty")
 
     try:
         token = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return MediaConfig(enabled=False, api_url=api_url, timeout_seconds=timeout_seconds)
+    except (OSError, UnicodeError):
+        return invalid("MEDIA_API_TOKEN_FILE is missing, unreadable or empty")
 
     if not token:
-        return MediaConfig(enabled=False, api_url=api_url, timeout_seconds=timeout_seconds)
+        return invalid("MEDIA_API_TOKEN_FILE is missing, unreadable or empty")
 
     return MediaConfig(
         enabled=True,
@@ -155,6 +191,7 @@ def create_receipt(
     log_path: str,
     assets: list[dict[str, Any]],
     receipts_dir: Path | str | None = None,
+    generation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create and persist a pending receipt for a generation run."""
     workspace = Path(workspace)
@@ -184,6 +221,8 @@ def create_receipt(
         "generation_run_id": None,
         "completed_at": None,
     }
+    if generation is not None:
+        receipt["generation"] = sanitize_payload(generation)
     save_receipt(receipt, receipts_dir)
     return receipt
 
@@ -244,6 +283,10 @@ def _build_multipart(
     return body, content_type
 
 
+class ReceiptConflictError(ValueError):
+    """A run key was reused with incompatible publication metadata."""
+
+
 class MediaHTTPError(Exception):
     """HTTP error from Media API with status and sanitized message."""
 
@@ -264,10 +307,31 @@ def sanitize_error_text(
     """Strip bearer tokens, signed URLs, and raw secrets from error strings."""
     if not text:
         return text
-    out = text
+    # Remove complete, explicitly delimited key blocks before token-oriented
+    # assignments can strip their BEGIN marker. DOTALL also covers real newlines;
+    # matching the same END label bounds redaction before subsequent metadata.
+    out = re.sub(
+        r"-----BEGIN (?P<key_kind>(?:RSA |EC |ENCRYPTED )?PRIVATE KEY)-----"
+        r".*?-----END (?P=key_kind)-----",
+        "[redacted-private-key]", text, flags=re.DOTALL,
+    )
+    # Cookie headers carry a whole list of credentials, not a whitespace token.
+    # Keep the line boundary so unrelated diagnostics on following lines survive.
+    # Real and log-escaped line endings delimit unquoted HTTP headers.
+    out = re.sub(
+        r"(?i)(?<![\w-])((?:[\w]+[_-])*cookie[ \t]*[:=][ \t]*)(?![ \t]*['\"])(?:(?!\\[rn])[^\r\n])*",
+        r"\1[redacted]", out,
+    )
     if token:
         out = out.replace(token, "[redacted-token]")
-    out = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-+/=]+", "Bearer [redacted]", out)
+    # A standalone auth value or an explicit header, not prose containing bearer.
+    out = re.sub(
+        r"(?i)(\bauthorization\s*[:=]\s*)bearer\s+[A-Za-z0-9._\-+/=]+",
+        r"\1Bearer [redacted]", out,
+    )
+    out = re.sub(r"(?i)^bearer\s+[A-Za-z0-9._\-+/=]+$", "Bearer [redacted]", out)
+    # JWTs have an identifiable base64url JSON header and three segments.
+    out = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[redacted-jwt]", out)
     out = re.sub(
         r"(?i)authorization\s*:\s*basic\s+[A-Za-z0-9+/=\s]+",
         "Authorization: Basic [redacted]",
@@ -275,11 +339,12 @@ def sanitize_error_text(
     )
     # Full URLs carrying AWS/Azure/query secrets
     out = re.sub(
-        r"https?://[^\s\"']+(?:X-Amz-|Signature=|signature=|sig=|token=|api_key=)[^\s\"']*",
+        r"https?://[^\s\"']+(?:X-Amz-|X-Goog-|Signature=|signature=|sig=|token=|api_key=|credential=)[^\s\"']*",
         "[redacted-signed-url]",
         out,
         flags=re.IGNORECASE,
     )
+    out = re.sub(r"https?://[^\s/]+@[^\s\"']+", "[redacted-credential-url]", out)
     # Bare query/form-style secret parameters (not only inside full URLs)
     out = re.sub(
         r"(?i)(?:\?|&|\s)(sig|token|api_key|access_key)=([^\s\"'&]+)",
@@ -293,17 +358,49 @@ def sanitize_error_text(
     )
     if api_url:
         out = out.replace(api_url, "[media-api]")
+    # Share assignment keys so quoted and unquoted credentials cannot drift.
+    # Authorization and Cookie retain their separate unquoted header handling.
+    assignment_keys = r"(?:private_key|api_key|token|password|secret|credential|access_key)"
+    # Quoted credentials may span lines and contain escaped quote characters.
+    # Only an unescaped matching quote terminates the identified value.
+    out = re.sub(
+        r"(?i)((?<![\w-])['\"]?(?:[\w]+[_-])*(?:authorization|cookie|" + assignment_keys +
+        r")[\"']?\s*[:=]\s*)(['\"])(?:\\.|(?!\2)[^\\])*\2",
+        lambda m: m.group(1) + m.group(2) + "[redacted]" + m.group(2),
+        out, flags=re.DOTALL,
+    )
     out = re.sub(
         r'(?i)("?(?:authorization|access_key|secret|password|api_key|token)"?\s*[:=]\s*")([^"]+)(")',
         r"\1[redacted]\3",
         out,
     )
     out = re.sub(
-        r"(?i)\b(api_key|token)\s*[:=]\s*([^\s\"',}]+)",
+        r"(?i)(?<![\w-])((?:[\w]+[_-])*" + assignment_keys + r")\s*[:=]\s*([^\s\"',}]+)",
         r"\1=[redacted]",
         out,
     )
     return out
+
+
+def sanitize_payload(value: Any, *, token: str | None = None) -> Any:
+    """Recursively redact credential keys and secret-bearing text, retaining metadata."""
+    if isinstance(value, dict):
+        count_fields = {
+            "max_tokens", "max_output_tokens", "max_input_tokens", "token_count",
+            "input_tokens", "output_tokens", "total_tokens", "cached_tokens",
+        }
+        return {
+            key: ("[redacted]" if re.fullmatch(
+                r"(?i)(?:[\w]+[_-])*(?:token|secret|password|authorization|api[_-]?key|credential|cookie|private[_-]?key|access[_-]?key|signature|signed[_-]?url)", str(key)
+            ) and str(key).lower() not in count_fields
+                else sanitize_payload(item, token=token))
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitize_payload(item, token=token) for item in value]
+    if isinstance(value, str):
+        return sanitize_error_text(value, token=token)
+    return value
 
 
 def _resolve_workspace_file(workspace: Path, rel: str) -> Path:
@@ -526,17 +623,20 @@ def sync_receipt(
     *,
     receipt: dict[str, Any],
     workspace: Path | str,
-    generation: dict[str, Any],
+    generation: dict[str, Any] | None = None,
     receipts_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     """Upload pending assets then post generation run. Updates receipt on disk."""
-    if not cfg.enabled:
+    if not cfg.enabled or receipt.get("status") == "completed":
         return receipt
 
     workspace = Path(workspace)
     receipts_dir = Path(receipts_dir) if receipts_dir is not None else default_receipts_dir(workspace)
     receipt = json.loads(json.dumps(receipt))  # deep copy
+    generation = sanitize_payload(receipt.get("generation", generation), token=cfg.token)
+    receipt["generation"] = generation
     receipt["attempts"] = int(receipt.get("attempts") or 0) + 1
+    save_receipt(receipt, receipts_dir)
 
     try:
         for asset in receipt["assets"]:
@@ -589,6 +689,8 @@ def sync_receipt(
         except MediaHTTPError as exc:
             if exc.status == 409:
                 receipt["status"] = "conflict"
+            elif exc.status in (400, 401, 403, 404, 422):
+                receipt["status"] = "failed"
             else:
                 receipt["status"] = "pending"
             receipt["last_error"] = sanitize_error_text(
@@ -622,16 +724,41 @@ def sync_if_enabled(
     receipts_dir: Path | str | None = None,
 ) -> Optional[dict[str, Any]]:
     """Create receipt and attempt one Media sync if configured."""
-    if not cfg.enabled:
+    if cfg.publication_status == "disabled":
         return None
     workspace = Path(workspace)
     receipts_dir = Path(receipts_dir) if receipts_dir is not None else default_receipts_dir(workspace)
-    receipt = create_receipt(
-        workspace=workspace,
-        log_path=log_path,
-        assets=assets,
-        receipts_dir=receipts_dir,
-    )
+    path = receipts_dir / receipt_filename(run_idempotency_key(log_path))
+    generation = sanitize_payload(generation, token=cfg.token)
+    if path.exists():
+        receipt = load_receipt(path)
+        fields = ("path", "kind", "role", "position", "show_in_grid", "origin")
+
+        def identity(asset: dict[str, Any]) -> dict[str, Any]:
+            return {
+                **{k: asset[k] for k in fields if k in asset},
+                "idempotency_key": asset.get("idempotency_key") or asset_idempotency_key(asset["path"]),
+            }
+
+        if (receipt.get("run_key") != run_idempotency_key(log_path)
+                or receipt.get("log_path") != log_path
+                or [identity(a) for a in receipt["assets"]] != [identity(a) for a in assets]
+                or ("generation" in receipt and receipt["generation"] != generation)):
+            raise ReceiptConflictError("incompatible publication receipt for run_key")
+        if receipt.get("status") in ("completed", "conflict", "failed"):
+            return receipt
+        if "generation" not in receipt:
+            receipt["generation"] = generation
+    else:
+        receipt = create_receipt(
+            workspace=workspace, log_path=log_path, assets=assets,
+            generation=generation, receipts_dir=receipts_dir,
+        )
+    if not cfg.enabled:
+        receipt["status"] = "config_error"
+        receipt["last_error"] = cfg.config_error or "publication configuration unavailable"
+        save_receipt(receipt, receipts_dir)
+        return receipt
     return sync_receipt(
         cfg,
         receipt=receipt,

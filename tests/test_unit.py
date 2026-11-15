@@ -1144,7 +1144,7 @@ class TestXaiProviderAndParse:
 
         monkeypatch.setattr(mediagen, "_require_httpx", lambda: FakeHttpx)
         mediagen.download_xai_media(
-            "https://imgen.x.ai/tmp.png",
+            "https://api.x.ai/tmp.png",
             dest,
             {"api_key": "secret-token", "provider": "xai-oauth"},
         )
