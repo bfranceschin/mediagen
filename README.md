@@ -144,7 +144,8 @@ Grok or another model. Requires `FAL_KEY` and the Hermes venv's `fal_client`.
 - `--negative-prompt` defaults to empty, maximum 500 characters.
 - Prompt expansion defaults on; `--no-prompt-expansion` disables it.
   `--multi-shots` defaults off and requires expansion on.
-- Audio defaults on; `--no-audio` disables it. Safety checking is always on.
+- Audio defaults on; `--no-audio` disables it. The request always hardcodes
+  `enable_safety_checker: false`; no CLI option re-enables this client control.
 - Optional integer `--seed` preserves zero; returned seed and `actual_prompt`
   are retained in sanitized generation metadata.
 - No end frame, fixed camera or aspect-ratio controls: these and other unsupported
@@ -168,6 +169,18 @@ non-finite values are rejected. Provider-specific parameters belong in this JSON
 built-in controls such as `--width`, `--duration` and `--no-audio` are rejected.
 Optional `--prompt`/`--seed` may supply missing top-level JSON fields but cannot
 contradict them. Prompts are not limited to Wan's length in generic mode.
+
+Client filtering policy: disable supported configurable safety controls, never
+silently enable a known option. For generic fal, include a top-level
+`enable_safety_checker` only when the endpoint schema supports it; if explicitly
+present, it is normalized to `false` before request identity, persistence and
+submission, even when the supplied value is `true`. The adapter does not validate
+endpoint support; input mappings cannot overwrite this top-level control.
+It does not inject it when absent, guess alternative
+keys, or recursively rewrite arbitrary nested data. Check the endpoint's schema
+instead of inventing parameters. This requests client-configurable filtering off;
+it does not guarantee that provider-side moderation is disabled, that the server
+honors the flag, or that the account has the required entitlement.
 
 Required `--operation`: `generate`, `edit`, `upscale`, `text-to-video`, or
 `image-to-video`. Input roles follow the common executor contract: no inputs for

@@ -25,11 +25,12 @@ def test_wan_cli_exact_flash_schema_and_resume(fake_fal, tmp_path, monkeypatch, 
     assert submits[0][1] == 'wan/v2.6/image-to-video/flash'
     assert submits[0][2] == {'prompt':'synthetic motion', 'image_url':'https://fal.media/files/input.png',
         'duration':'5', 'resolution':'720p', 'negative_prompt':'', 'enable_prompt_expansion':True,
-        'multi_shots':False, 'enable_safety_checker':True, 'generate_audio':True}
+        'multi_shots':False, 'enable_safety_checker':False, 'generate_audio':True}
     log = json.loads((ws / 'logs/wan-1.json').read_text())
     assert log['generation']['model'] == 'wan26flash'
     assert log['generation']['seed'] == 0
     assert log['generation']['operation'] == 'image-to-video'
+    assert log['generation']['params']['arguments']['enable_safety_checker'] is False
     assert len(list((ws / 'videos/raw').rglob('*.mp4'))) == 1
     assert capsys.readouterr().out.splitlines()[-1].endswith('SEED=0')
 
@@ -76,7 +77,7 @@ def test_wan_explicit_schema_controls(fake_fal, tmp_path, monkeypatch, duration)
     assert payload['enable_prompt_expansion'] is False
     assert payload['multi_shots'] is False
     assert payload['generate_audio'] is False
-    assert payload['enable_safety_checker'] is True
+    assert payload['enable_safety_checker'] is False
     assert payload['seed'] == 0
 
 

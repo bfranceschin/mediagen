@@ -91,6 +91,58 @@ def replace_flag(argv, flag, value):
     return result
 
 
+@pytest.mark.parametrize('requested', [True, False])
+def test_generic_explicit_safety_checker_is_disabled_before_persistence_and_submit(fake_fal, tmp_path, monkeypatch, requested):
+    ws, calls = fake_fal
+    source = tmp_path / 'in.png'
+    source.write_bytes(b'SYNTHETIC INPUT')
+    arguments = {'images': [None], 'enable_safety_checker': requested}
+    argv = replace_flag(generic_args(source), '--fal-args', json.dumps(arguments))
+    original = sys.modules['fal_client'].subscribe
+    def subscribe(endpoint, *, arguments):
+        intent = json.loads((ws / 'logs/generic-1.intent.json').read_text())
+        assert intent['identity']['params']['arguments']['enable_safety_checker'] is False
+        assert arguments['enable_safety_checker'] is False
+        return original(endpoint, arguments=arguments)
+    monkeypatch.setattr(sys.modules['fal_client'], 'subscribe', subscribe)
+    result = cli(monkeypatch, argv)
+    log = json.loads(result.log_path.read_text())
+    assert log['generation']['params']['arguments']['enable_safety_checker'] is False
+    source.unlink()
+    arguments['enable_safety_checker'] = False
+    cli(monkeypatch, replace_flag(argv, '--fal-args', json.dumps(arguments)))
+    assert len([c for c in calls if c[0] == 'subscribe']) == 1
+
+
+def test_generic_does_not_inject_or_guess_nested_safety_controls(fake_fal, tmp_path, monkeypatch):
+    ws, calls = fake_fal
+    source = tmp_path / 'in.png'
+    source.write_bytes(b'SYNTHETIC INPUT')
+    arguments = {'images': [None], 'custom': {'enable_safety_checker': True},
+                 'safety_tolerance': 'custom-value'}
+    cli(monkeypatch, replace_flag(generic_args(source), '--fal-args', json.dumps(arguments)))
+    payload = next(c[2] for c in calls if c[0] == 'subscribe')
+    assert 'enable_safety_checker' not in payload
+    assert payload['custom'] == arguments['custom']
+    assert payload['safety_tolerance'] == 'custom-value'
+    logged = json.loads((ws / 'logs/generic-1.json').read_text())['generation']['params']['arguments']
+    assert 'enable_safety_checker' not in logged
+    assert logged == arguments
+
+
+def test_generic_rejects_input_binding_that_would_overwrite_safety_control(fake_fal, tmp_path, monkeypatch):
+    ws, calls = fake_fal
+    source = tmp_path / 'in.png'
+    source.write_bytes(b'SYNTHETIC INPUT')
+    argv = replace_flag(generic_args(source), '--fal-args', '{"enable_safety_checker":true}')
+    argv = replace_flag(argv, '--fal-input-map', json.dumps([
+        {'input': 0, 'path': 'enable_safety_checker', 'role': 'edit_source', 'kind': 'image'}]))
+    with pytest.raises(SystemExit):
+        cli(monkeypatch, argv)
+    assert calls == []
+    assert not list(ws.rglob('*.intent.json'))
+
+
 def test_generic_preserves_complete_long_prompt(fake_fal, tmp_path, monkeypatch):
     ws, calls = fake_fal
     source = tmp_path / 'in.png'

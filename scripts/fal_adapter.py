@@ -85,6 +85,10 @@ def _generic(args):
     if not isinstance(args.fal_endpoint, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)+', args.fal_endpoint):
         raise ValueError('fal endpoint must be a model identifier, not a URL')
     arguments = _json(args.fal_args, dict)
+    # Explicit top-level control only: unknown endpoint schemas must not receive
+    # invented fields or recursive edits to arbitrary nested provider data.
+    if 'enable_safety_checker' in arguments:
+        arguments['enable_safety_checker'] = False
     bindings = _json(args.fal_input_map, list)
     outputs = _json(args.fal_output_map, list)
     if not args.operation or not args.fal_kind or not outputs:
@@ -101,6 +105,8 @@ def _generic(args):
             raise ValueError('input mappings must follow local input order')
         _get(arguments, binding['path'])
         parts = _parts(binding['path'])
+        if parts[0] == 'enable_safety_checker':
+            raise ValueError('input mapping cannot overwrite the safety checker control')
         if any(parts[:len(other)] == other or other[:len(parts)] == parts for other in paths):
             raise ValueError('input mapping paths must not duplicate or overlap')
         paths.append(parts)
@@ -224,7 +230,7 @@ def _wan(args):
     arguments = {'prompt': args.prompt, 'image_url': None, 'duration': str(args.duration),
                  'resolution': args.resolution or '720p', 'negative_prompt': args.negative_prompt,
                  'enable_prompt_expansion': not args.no_prompt_expansion, 'multi_shots': args.multi_shots,
-                 'enable_safety_checker': True, 'generate_audio': not args.no_audio}
+                 'enable_safety_checker': False, 'generate_audio': not args.no_audio}
     if args.seed is not None:
         arguments['seed'] = args.seed
     bindings = [{'input': 0, 'path': 'image_url', 'role': 'start_frame', 'kind': 'image'}]

@@ -89,6 +89,18 @@ FLUX.2 dev generation: ~$0.012/MP; edit may bill inputs too. Seedance 1.5 Pro: ~
 - Seeds work for FLUX/Seedance/SeedVR; GPT and Grok have no seed. Nano may return a null seed: do not treat provided seeds as guaranteed reproducibility.
 - Upscale takes exactly one input. Use factor 1–10 (default 2) or target `--resolution 1080p|1440p|2160p`, not both. GPT/Grok edit-at-larger-size is a redraw, not super-resolution.
 
+### Configurable client filtering policy
+
+Always disable supported configurable safety checkers; never silently enable a
+known option. Keep disabling controls hardcoded where the schema is known:
+FLUX/Seedance/Wan send `enable_safety_checker: false`; Nano retains
+`safety_tolerance: "6"` (its permissive control, not a guarantee of no moderation).
+Do not invent flags for GPT, Grok, SeedVR or unknown endpoint schemas. Verify the
+provider schema before selecting controls; no automatic parameter guesses.
+These are client filtering preferences, not a promise that the provider honors
+them or disables server moderation, nor evidence of account entitlement. Report
+provider rejections honestly; do not imply this policy bypasses server rules.
+
 ## Explicit Wan Flash and generic fal
 
 `--model wan26flash --inputs /path/start.png --prompt "..." --run-id my-run`
@@ -97,7 +109,8 @@ uses only `wan/v2.6/image-to-video/flash`. One readable image, dimensions each
 Duration `5|10|15` (string on wire), resolution `720p|1080p`; CLI defaults 5/720p,
 not the provider's 1080p resolution default. Expansion defaults true
 (`--no-prompt-expansion`); `--multi-shots` requires expansion. Audio defaults true
-(`--no-audio`); safety checker always true. Optional integer seed includes zero.
+(`--no-audio`); `enable_safety_checker` is hardcoded false, with no re-enable flag.
+Optional integer seed includes zero.
 Reject end-image/camera-fixed/aspect-ratio and unsupported controls before upload.
 No optional audio URL input is exposed. This route is separately billed, never a
 subscription fallback, and has not been live-tested by the offline implementation.
@@ -113,6 +126,13 @@ Dot paths support list indices, including root lists. Multiple mapped outputs
 must match declared kind. Put custom controls in JSON, not built-in flags. Retain
 full generic prompts, request JSON/mappings, explicit endpoint/model and returned
 seed in sanitized metadata; do not impose Wan's prompt limit on other endpoints.
+For a schema that supports top-level `enable_safety_checker`, explicitly include
+it as false. The adapter forces this key to false whenever present (including a
+supplied true) before GenerationSpec identity, persistence and provider submission.
+Input mappings cannot overwrite this top-level control.
+It does not establish endpoint support, inject an absent flag, guess other keys
+or recursively modify arbitrary nested JSON. Never claim all filtering is disabled
+on an unknown endpoint just because the generic adapter was used.
 
 Both routes use persistent inputs and LOCAL callback outputs through the common
 executor/finalizer: one CLI invocation generates, persists and attempts optional
