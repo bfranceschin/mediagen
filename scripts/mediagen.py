@@ -423,40 +423,26 @@ def finalize_generation_with_media_sync(meta: dict) -> None:
     cfg = None
     try:
         if load_config is not None and sync_if_enabled is not None:
+            import generation_executor
             assets, generation = build_media_sync_payload(
-                kind=meta["kind"],
-                mode=meta["mode"],
-                model=meta["model"],
-                endpoint=meta["endpoint"],
-                prompt=prompt,
-                seed=meta.get("seed"),
+                kind=meta["kind"], mode=meta["mode"], model=meta["model"],
+                endpoint=meta["endpoint"], prompt=prompt, seed=meta.get("seed"),
                 output_path=meta["output_path"],
                 input_md_entries=meta.get("input_md_entries") or [],
-                end_md_entry=meta.get("end_md_entry"),
-                params=meta.get("params"),
+                end_md_entry=meta.get("end_md_entry"), params=meta.get("params"),
             )
-            cfg = load_config()
-            if cfg is not None:
-                result = sync_if_enabled(
-                    cfg,
-                    workspace=WORKSPACE,
-                    log_path=workspace_relpath(meta["log_path"]),
-                    assets=assets,
-                    generation=generation,
-                )
-                if result is not None:
-                    publication = {"status": result["status"], "last_error": result.get("last_error")}
+            publication, receipt_path = generation_executor.finalize_publication(
+                workspace=WORKSPACE, log_path=Path(meta["log_path"]),
+                assets=assets, generation=generation, load_config=load_config,
+                sync=sync_if_enabled,
+            )
+            meta["receipt_path"] = receipt_path
         else:
             publication = {"status": "config_error", "last_error": "media_client import unavailable; publication not attempted"}
-    except ReceiptConflictError:
-        publication = {"status": "conflict", "last_error": "incompatible publication receipt; original preserved"}
     except Exception as exc:
-        # Do not claim durable recovery if receipt persistence itself failed.
         message = "publication finalization failed; check receipt before retry"
         if sanitize_media_error is not None:
-            message += ": " + sanitize_media_error(
-                str(exc), token=getattr(cfg, "token", None), api_url=getattr(cfg, "api_url", None)
-            )
+            message += ": " + sanitize_media_error(str(exc))
         publication = {"status": "pending", "last_error": message}
     error = publication.get("last_error")
     if error and sanitize_media_error is not None:
@@ -1741,8 +1727,8 @@ def _write_image_artifacts(
         "inputs": [str(Path(e["path"])) for e in input_md_entries] if mode in {"edit", "upscale"} else [],
         **log_extra,
     }
-    with open(log_path, "w") as f:
-        json.dump(log_data, f, indent=2, default=str)
+    import generation_executor
+    generation_executor.persist_json(log_path, log_data)
 
     model_key = canonical_model(getattr(args, "model", None) or "unknown")
     params: dict[str, Any] = {
@@ -1867,8 +1853,8 @@ Camera fixed: {camera_str}
     else:
         log_data["fal_response"] = result
     log_data.update(extra)
-    with open(log_path, "w") as f:
-        json.dump(log_data, f, indent=2, default=str)
+    import generation_executor
+    generation_executor.persist_json(log_path, log_data)
 
     model_key = getattr(args, "model", None) or "seedance2"
     params = {
