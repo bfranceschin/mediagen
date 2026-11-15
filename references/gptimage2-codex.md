@@ -1,63 +1,50 @@
-# GPT Image 2 via ChatGPT / Codex OAuth (`gptimage2`)
+# GPT Image via ChatGPT / Codex OAuth (`gptimage2`)
 
-## When to use
-- User asks for GPT Image 2 / ChatGPT image gen inside **mediagen**
-- Want to avoid burning fal.ai credits while ChatGPT/Codex OAuth is signed in
-- Do **not** switch Hermes global `image_gen.provider` just to use mediagen gptimage2 — the skill talks to Codex directly
+## Selection and auth
 
-## Auth
-- Credential: Hermes `openai-codex` OAuth (`hermes auth add openai-codex --no-browser` on headless hosts)
-- Token reader: `agent.auxiliary_client._read_codex_access_token` (+ `_codex_cloudflare_headers`)
-- Always run the script with Hermes venv Python so helpers + `httpx` resolve:
-  ```bash
-  ~/.hermes/hermes-agent/venv/bin/python \
-    ~/.hermes/skills/media/mediagen/scripts/mediagen.py \
-    --model gptimage2 --prompt "..." --quality low
-  ```
+Prefer the existing ChatGPT/Codex subscription route before separately billed alternatives. The legacy CLI alias `gptimage2` is retained even when selecting a newer model. Never change global Hermes providers and never automatically fall back to the OpenAI paid API or fal on errors.
 
-## API surface (script embeds this; do not invent REST /images paths)
-- Base: `https://chatgpt.com/backend-api/codex/responses` (SSE stream)
-- Host chat model: `gpt-5.5` (only hosts the tool call)
-- Image tool: `type=image_generation`, `model=gpt-image-2`
-- Qualities: `low` | `medium` | `high` (CLI `--quality`)
-- Fixed sizes only:
-  - landscape `1536x1024`
-  - square `1024x1024`
-  - portrait `1024x1536`
-- mediagen maps `--width/--height` → nearest aspect (ratio ≥1.2 landscape, ≤0.833 portrait, else square). **Edit without flags inherits the first input** (then snaps to those three boxes).
-- Edit: local files as Responses `input_image` data URLs (PNG/JPEG/GIF/WebP, ≤25MB, up to 16)
-- Seed: **not supported** → stdout `SEED=n/a`
-- Output: PNG bytes in SSE `image_generation_call.result` / `partial_image_b64`
+Use Hermes venv: `~/.hermes/hermes-agent/venv/bin/python`. Credential is Hermes `openai-codex`; use `hermes auth add openai-codex` only when credentials are actually missing. Current credential helper is `hermes_cli.auth_codex.resolve_codex_runtime_credentials()`; older Hermes versions may use `agent.auxiliary_client`. Do not print tokens.
 
-## CLI / filenames
+## API surface
+
+- URL: `https://chatgpt.com/backend-api/codex/responses`, streamed SSE.
+- Default image tool model: `gpt-image-2.5-sunburst`.
+- Other explicit selections: `gpt-image-2.5-flare`, legacy `gpt-image-2`.
+- Top-level chat model only hosts the tool. Use verified account support; default `gpt-6.1-sol`, with `MEDIAGEN_CODEX_CHAT_MODEL` override.
+- The tool remains `type: image_generation`; changing chat model does not itself upgrade the image model.
+- Image 2.5 supports `low`, `medium`, `high`, `xhigh`, `max`; legacy Image 2 supports low/medium/high. Default CLI quality remains medium; prefer high for final-quality requests.
+- Current CLI framing maps requested aspect to landscape `1536x1024`, square `1024x1024`, portrait `1024x1536`. This is an integration constraint, not a claim newer APIs only accept these sizes.
+- Edit inputs are local PNG/JPEG/GIF/WebP data URLs, up to 16, each <=25 MB.
+- No seed; log null for Media sync and display `n/a` in user-facing stdout.
+
+## Verification
+
+A live Codex OAuth generation using the Sunburst tool selector, host `gpt-6.1-sol`, high quality and 1024x1024 successfully returned a verified PNG. Acceptance of a requested model does not independently prove the server's internal routing; record a reported served model when available and do not invent one.
+
+Public API docs: https://developers.openai.com/api/docs/guides/tools-image-generation
+Availability announcement: https://openai.com/index/introducing-chatgpt-images-2-5/
+
+Public API model support alone does not prove the private Codex OAuth route supports all the same parameters. Validate added selectors and qualities on the actual account; do not silently downgrade when unsupported.
+
+## CLI and persistence
+
 ```bash
-# generate
---model gptimage2 --quality medium --width 1024 --height 1024 --prompt "..."
-
-# edit
---model gptimage2 --quality low --inputs /path/a.png --prompt "edit..."
+PYTHON=~/.hermes/hermes-agent/venv/bin/python
+SCRIPT=~/.hermes/skills/media/mediagen/scripts/mediagen.py
+$PYTHON $SCRIPT --help
+$PYTHON $SCRIPT --model gptimage2 --quality high --prompt "..."
+$PYTHON $SCRIPT --model gptimage2 --quality high --inputs /path/a.png --prompt "..."
 ```
-Filenames: `YYYYMMDD_HHMMSS_gptimage2_<quality>[_edit].png`
-Endpoint labels in md/log: `openai-codex/gpt-image-2` and `.../edit`
 
-## Smoke test without changing Hermes global image_gen
-Global `image_gen.use_gateway: true` / FAL can stay. Test Codex path only via mediagen CLI above, or one-shot importing the bundled plugin:
-`plugins/image_gen/openai-codex` with `OPENAI_IMAGE_MODEL=gpt-image-2-low`.
+Omit dimensions on edit unless explicitly changing format. Use `--image-model gpt-image-2.5-sunburst|gpt-image-2.5-flare|gpt-image-2` for explicit selection, or `MEDIAGEN_GPT_IMAGE_MODEL` for the default. A successful live CLI test returned a valid PNG and correct requested-model log label; the server reported the host chat model but not a served image model. Do not claim independent confirmation of internal image routing or exact output dimensions from the requested size alone. Preserve existing filenames `*_gptimage2_<quality>[_edit].png`, but JSON/markdown endpoint labels and model metadata must identify the actual requested image model, not hardcode Image 2.
 
-## Failure signals
-| Symptom | Meaning | Action |
-|---------|---------|--------|
-| `No ChatGPT/Codex OAuth credentials` | Not logged in / wrong Python | `hermes auth add openai-codex --no-browser`; use Hermes venv |
-| `Image generation is not enabled for the current ChatGPT/Codex account` | Account lacks tool | fall back to `flux2`/`nano2` |
-| HTTP 400 with tool_choice image_generation not found | same capability gap | fall back to fal models |
-| `httpx not installed` | wrong interpreter | Hermes venv |
+## Failures
 
-## Defaults / product choice
-- Keep **fal.ai** (`flux2`/`nano2`/`seedance2`) as the day-to-day default
-- Use **`gptimage2` when explicitly requested** or when avoiding fal spend is the goal
-- Do **not** auto-promote gptimage2 or rewrite `image_gen.provider` during mediagen work unless asked
+- Missing auth: stop and explain how to authenticate.
+- Unsupported model/tool/quality: report the actual error; offer a supported subscription alternative first.
+- Quota exhausted: report quota and ask before additional billing.
+- Timeout: request outcome may be uncertain, so do not repeatedly resubmit blindly.
+- Wrong Python: use Hermes venv for auth helpers and httpx.
 
-## Relation to native Hermes `image_generate`
-- Native tool backend = whatever `image_gen.provider` / gateway says (often FAL via Nous)
-- mediagen `gptimage2` is independent and preferred for skill workflows
-- Native tool may auto-upscale on fal (costly); mediagen does not. Use `--model seedvr` for opt-in upscale
+Never interpret missing legacy token helpers as proof the user is logged out. Native `image_generate` is independent of this direct mediagen route.

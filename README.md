@@ -1,10 +1,10 @@
 # mediagen
 
-Image and video generation skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — powered by [fal.ai](https://fal.ai), optional GPT Image 2 via ChatGPT/Codex OAuth, and optional Grok Imagine via xAI.
+Image and video generation skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent). Prefer existing subscriptions: GPT Image 2.5 Sunburst via ChatGPT/Codex OAuth for images, Grok Imagine Video 1.5 via SuperGrok OAuth for video. fal.ai alternatives remain explicit, separately billed options.
 
 ## Features
 
-- **Image generation** via FLUX.2 (dev) and Nano Banana 2
+- **Image generation** via Codex GPT Image 2.5, Grok Image 2.0, FLUX.2 (dev), and Nano Banana 2.1
 - **Image editing** with reference images (1-4 inputs)
 - **Image upscale** via SeedVR2 (`seedvr` / alias `upscale`) — opt-in, never automatic
 - **Video generation** via Seedance 1.5 Pro (text-to-video and image-to-video)
@@ -13,7 +13,7 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 - **Full persistence** — generated files, metadata (.md), and JSON logs
 - **Optional Hostkit Media sync** — receipts + one-shot upload after generate (Telegram contract unchanged)
 - **Reproducibility** — seed support for consistent results
-- **Web search grounding** (Nano Banana 2 only)
+- **Web search grounding** (Nano Banana 2.1)
 - **Cinematic camera control** — dolly, pan, orbit, tripod mode
 
 ## Models
@@ -21,8 +21,8 @@ Image and video generation skill for [Hermes Agent](https://github.com/NousResea
 | Model | Key | Endpoint | Best for | Cost |
 |-------|-----|----------|----------|------|
 | FLUX.2 [dev] | `flux2` | `fal-ai/flux-2` | High-quality photorealistic/artistic images | ~$0.012/MP |
-| Nano Banana 2 | `nano2` | `fal-ai/nano-banana-2` | Text rendering, complex composition, web grounding | ~$0.05/image |
-| GPT Image 2 | `gptimage2` | ChatGPT/Codex OAuth (`openai-codex/gpt-image-2`) | GPT Image 2 without OpenAI API key; quality tiers low/medium/high | ChatGPT quota |
+| Nano Banana 2.1 | `nano2` / `nano21` | `google/nano-banana-2.1` | Explicit 1K/2K/4K resolution and minimal/medium/high thinking | Token-based; measured ~$0.04 at 1K, variable |
+| GPT Image 2.5 Sunburst | `gptimage2` | ChatGPT/Codex OAuth (`openai-codex/gpt-image-2.5-sunburst`) | Preferred images; `--image-model` also selects Flare or legacy Image 2 | ChatGPT quota |
 | Grok Imagine Image 2.0 | `grokimage2` | `https://api.x.ai/v1/images/generations` | Grok image generate/edit; quality low/medium; 1k/2k | SuperGrok / `XAI_API_KEY` |
 | SeedVR2 | `seedvr` (alias `upscale`) | `fal-ai/seedvr/upscale/image` | Opt-in image upscale 1–10× or 1080p–2160p | $0.001/MP out |
 | Seedance 1.5 Pro | `seedance2` | `fal-ai/bytedance/seedance/v1.5/pro/text-to-video` | Short-form video with audio, dialogue, music | ~$0.26/5s@720p |
@@ -50,7 +50,7 @@ python3 scripts/mediagen.py \
 ```
 
 
-### GPT Image 2 (ChatGPT/Codex OAuth)
+### GPT Image 2.5 (ChatGPT/Codex OAuth)
 
 Requires `hermes auth add openai-codex` and Hermes venv Python (`httpx` + token helpers).
 
@@ -64,7 +64,7 @@ Requires `hermes auth add openai-codex` and Hermes venv Python (`httpx` + token 
 
 ### Grok Imagine (xAI OAuth or XAI_API_KEY)
 
-Requires Hermes venv Python. Prefers `hermes auth add xai-oauth`; falls back to `XAI_API_KEY`. Do not change Hermes `image_gen.provider` / `video_gen.provider`.
+Requires Hermes venv Python. Prefers `hermes auth add xai-oauth`; separately billed `XAI_API_KEY` usage requires explicit `--allow-xai-api-key`. No silent paid fallback. Do not change Hermes `image_gen.provider` / `video_gen.provider`.
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python scripts/mediagen.py \
