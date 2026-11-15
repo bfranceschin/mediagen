@@ -208,9 +208,9 @@ rejected for older built-in routes, whose existing finalization remains intact.
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--model` | Yes | — | `flux2`, `nano2`, `gptimage2`, `grokimage2`, `seedance2`, or `grokvideo` |
-| `--prompt` | Yes | — | Text prompt or edit instruction |
-| `--inputs` | No | — | Input images: 1-4 for image edit, exactly 1 for video |
+| `--model` | Yes | — | `flux2`, `nano2`/`nano21`, `gptimage2`, `grokimage2`, `seedance2`, `grokvideo`, `seedvr`/`upscale`, `wan26flash`/`wan2.6flash`/`wan`, or `fal` |
+| `--prompt` | Model-dependent | — | Text prompt/edit instruction; optional for upscale or supplied in generic fal JSON |
+| `--inputs` | Model-dependent | — | Image edit/upscale/frame inputs; Wan requires exactly one image; generic fal uses explicit input bindings |
 | `--seed` | No | random | Reproducibility seed |
 
 ### Image-only
@@ -229,15 +229,15 @@ rejected for older built-in routes, whose existing finalization remains intact.
 | `--end-image` | — | End frame image (seedance2 i2v only) |
 | `--resolution` | `720p` | `480p`, `720p`, or `1080p` |
 | `--aspect-ratio` | t2v 16:9; i2v inherit | Omit on i2v to match the start frame. Set to force a format. |
-| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s |
+| `--duration` | 5 | seedance 4–12s; grokvideo 1–15s; Wan 5/10/15s; generic fal uses JSON |
 | `--camera-fixed` | false | Lock camera (seedance2 only) |
-| `--no-audio` | false | Disable audio (seedance2 only) |
+| `--no-audio` | false | Disable audio (seedance2 or Wan); generic fal uses JSON |
 
 ## Requirements
 
 - Python 3.11+
 - `fal_client` (`pip install fal-client`) for fal models
-- `FAL_KEY` for `flux2`/`nano2`/`seedance2`
+- `FAL_KEY` for fal routes: `flux2`, `nano2`/`nano21`, `seedance2`, `seedvr`/`upscale`, Wan and generic `fal`
 - Hermes venv + `hermes auth add openai-codex` for `gptimage2`
 - Hermes venv + `hermes auth add xai-oauth` or `XAI_API_KEY` for `grokimage2`/`grokvideo`
 
@@ -265,7 +265,7 @@ When configured, each successful generation creates a receipt and attempts one M
 FILENAME=<filename> PROMPT=<prompt> SEED=<seed>
 ```
 
-Media outages leave the binary/log/receipt intact and still exit `0`. Missing config disables sync (no error).
+A successful local generation remains successful when publication fails, with `PUBLICATION=<status>` on stderr and local artifacts retained. Omitting both publication settings intentionally disables sync; partial, empty or invalid settings produce `config_error` and a recoverable receipt. Reentering a Wan/generic run solely to retry publication returns nonzero if publication remains incomplete; see [publication receipts](docs/publication-receipts.md).
 
 ```text
 MEDIA_API_URL=https://media.example.dev
@@ -294,11 +294,8 @@ Default is dry-run (no HTTP). `--apply` is opt-in and uses the same `MEDIA_API_U
 # Run unit tests (fast, no API calls, no cost)
 python -m pytest tests/test_unit.py tests/test_media_client.py tests/test_mediagen_media_sync.py -q
 
-# Run integration tests (calls real fal.ai API — costs ~$0.01-0.26)
-python -m pytest tests/test_integration.py -v --run-integration
-
-# Run all tests
-python -m pytest tests/ -v
+# Run the offline suite (global environment cleanup and socket guard)
+python -m pytest tests/ -v --ignore=tests/test_integration.py
 ```
 
 ### Test structure
@@ -311,7 +308,7 @@ python -m pytest tests/ -v
 | `tests/test_media_backfill.py` | Backfill parser/reconciliation (mocked HTTP) | ❌ No | Free |
 | `tests/test_integration.py` | Full pipeline with real API | ✅ Yes | ~$0.01-0.26 |
 
-Integration tests are **skipped by default** — only run when `--run-integration` flag is passed, so you never accidentally spend money.
+Tests marked `integration` are **unconditionally skipped** by the current offline conftest. There is no supported `--run-integration` opt-in in this suite. Live generation/publication requires a separately approved verification procedure; do not weaken the offline guard to run it.
 
 ## License
 

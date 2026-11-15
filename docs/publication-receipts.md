@@ -54,7 +54,6 @@ complete is included in the command's sanitized errors (nonzero CLI exit), not
 reported as successful publication. Completed/conflict/failed remain excluded from
 bulk retry; explicitly diagnosed failed receipts can still use `sync_receipt`.
 
-No worker, new provider, generation executor, automatic backoff or uncertain
-provider-request recovery is included. Concurrent writers to one receipt are not
+This publication layer does not itself implement a generation executor or provider adapter; those are separate modules in this delivery. No worker, automatic backoff or uncertain provider-request recovery is included. Concurrent writers to one receipt are not
 serialized; callers must serialize the same run key. Asset contents are not hashed
 by this layer, so do not mutate a local asset in place between attempts.

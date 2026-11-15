@@ -3,7 +3,7 @@
 Custom adapters call `execute_generation`, not an uploader. Built-in CLI routes
 retain their provider/auth handling and sidecars, but use the same
 `persist_json` and `finalize_publication` boundary. Only `media_client` uploads.
-There is no generic provider CLI or new model in this API.
+This module is a local-output Python API, not a provider adapter. The separate CLI/fal adapter adds Wan and generic fal routes on top of it; see the [README](../README.md).
 
 ## Contract
 
